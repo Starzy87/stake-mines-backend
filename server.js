@@ -1,9 +1,25 @@
-// server.js (CommonJS) — minimal working API for your Mines-style frontend
+
+});// server.js (CommonJS) — minimal working API for your Mines-style frontend
 const express = require("express");
 const crypto = require("crypto");
 
 const app = express();
 app.use(express.json());
+const express = require("express");
+const crypto = require("crypto");
+
+const app = express();
+app.use(express.json());
+
+// Allow requests from your frontend (CORS)
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
 
 // -------------------- Helpers --------------------
 function sha256Hex(input) {
