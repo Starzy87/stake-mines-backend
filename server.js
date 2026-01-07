@@ -1,10 +1,5 @@
 
-});// server.js (CommonJS) — minimal working API for your Mines-style frontend
-const express = require("express");
-const crypto = require("crypto");
-
-const app = express();
-app.use(express.json());
+// server.js (CommonJS) — minimal working API for your Mines-style frontend
 const express = require("express");
 const crypto = require("crypto");
 
