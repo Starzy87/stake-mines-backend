@@ -2,6 +2,15 @@
 // server.js (CommonJS) — minimal working API for your Mines-style frontend
 const express = require("express");
 const crypto = require("crypto");
+const path = require("path");
+const { MathEngine } = require("./math/engine");
+const fs = require("fs");
+
+const PUBLISH_DIR = path.join(__dirname, "publish_files");
+
+
+const math = new MathEngine({ publishDir: path.join(__dirname, "publish_files") });
+math.load();
 
 const app = express();
 app.use(express.json());
@@ -24,6 +33,19 @@ function sha256Hex(input) {
 function hmacSha256(key, msg) {
   return crypto.createHmac("sha256", key).update(msg).digest();
 }
+
+// -------------------- Provably Fair State --------------------
+app.get("/pf/state", (req, res) => {
+  if (!session.nextServerSeed) {
+    session.nextServerSeed = crypto.randomBytes(32).toString("hex");
+    session.nextServerHash = sha256Hex(session.nextServerSeed);
+  }
+
+  res.json({
+    nextHash: session.nextServerHash,
+    nonce: session.nonce || 0
+  });
+});
 
 // Generates deterministic floats in [0,1) using HMAC-SHA256 like your frontend
 function generateFloats(serverSeed, clientSeed, nonce, count) {
@@ -82,9 +104,20 @@ app.get("/", (req, res) => {
 });
 
 // Start a new bet/game
+// List math publish files (debug helper)
+app.get("/pf/files", (req, res) => {
+  try {
+    const files = fs.readdirSync(PUBLISH_DIR);
+    res.json({ ok: true, files });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+    // Start a new bet/game
 app.post("/bet", (req, res) => {
   try {
-    const { bet, mines, mode, clientSeed } = req.body || {};
+    const { bet, mines, mode, clientSeed } = req.body;
 
     const betNum = Number(bet);
     const minesNum = Number(mines);
