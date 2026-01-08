@@ -56,7 +56,8 @@ db.nextServerHash = sha256(db.nextServerSeed);
 app.get('/api/init', (req, res) => {
     const response = { 
         balance: db.balance, 
-        hash: db.nextServerHash,
+        hash: db.nextServerHash,   // commitment for NEXT round
+        nonce: db.nonce,
         activeGame: null
     };
 
@@ -77,6 +78,17 @@ app.get('/api/init', (req, res) => {
 app.post('/api/bet', (req, res) => {
     const { amount, mines, clientSeed, mode, autoPattern } = req.body;
     
+    // ✅ Basic validation
+    if (!Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({ error: "Invalid bet amount" });
+    }
+    if (!Number.isInteger(mines) || mines < 1 || mines > 24) {
+        return res.status(400).json({ error: "Invalid mines count" });
+    }
+    if (typeof clientSeed !== "string" || clientSeed.length < 1 || clientSeed.length > 64) {
+        return res.status(400).json({ error: "Invalid client seed" });
+    }
+    
     if(db.activeGame && !db.activeGame.isOver) return res.status(400).json({error: "Game in progress"});
     
     let costMult = 1;
@@ -86,9 +98,8 @@ app.post('/api/bet', (req, res) => {
     const totalCost = amount * costMult;
     if(totalCost > db.balance) return res.status(400).json({error: "Insufficient funds"});
 
-    // ROTATE SEEDS
-    if(!db.serverSeed) db.serverSeed = db.nextServerSeed; 
-    else db.serverSeed = db.nextServerSeed;
+    // ✅ Rotate seeds (use the committed seed for THIS round)
+    db.serverSeed = db.nextServerSeed;
     
     db.nonce++;
     db.nextServerSeed = generateSeed();
@@ -144,6 +155,7 @@ app.post('/api/bet', (req, res) => {
     db.activeGame = {
         bet: totalCost,
         baseBet: amount,
+        clientSeed: clientSeed,
         mines: mineLocations,
         specialItems: specialItems,
         revealed: [],
@@ -160,50 +172,55 @@ app.post('/api/bet', (req, res) => {
     });
 });
 
-// 3. REVEAL TILE
+// 3. REVEAL TILE (FIXED: Distinguishes SAFE vs BOMB logic)
 app.post('/api/reveal', (req, res) => {
     const { index } = req.body;
     const game = db.activeGame;
-    
-    if(!game || game.isOver) return res.status(400).json({error: "No active game"});
-    if(game.revealed.includes(index)) return res.status(400).json({error: "Tile already revealed"});
 
-    if(game.mines.includes(index)) {
+    if (!game || game.isOver) return res.status(400).json({ error: "No active game" });
+    if (game.revealed.includes(index)) return res.status(400).json({ error: "Tile already revealed" });
+
+    // 💣 BOMB
+    if (game.mines.includes(index)) {
         game.isOver = true;
-        // RETURN ALL DATA FOR GHOST REVEAL
-        return res.json({ 
-            status: "BOMB", 
-            mineMap: game.mines, 
-            specialMap: game.specialItems 
+        return res.json({
+            status: "BOMB",
+            mineMap: game.mines,
+            specialMap: game.specialItems,
+
+            // ✅ proof fields
+            serverSeed: db.serverSeed,
+            clientSeed: game.clientSeed,
+            nonce: db.nonce
         });
     }
 
-    // SAFE HIT
+    // ✅ SAFE
     game.revealed.push(index);
     const stepIndex = game.revealed.length - 1;
+
     let currentPayout = game.bet * game.multiStack[stepIndex];
-    
+
     let specialData = null;
-    if(game.specialItems[index]) {
+    if (game.specialItems[index]) {
         specialData = game.specialItems[index];
-        // Apply Booster Multiplier
         currentPayout = currentPayout * specialData.mult;
     }
-    
+
     // Cap Win
-    if(currentPayout > game.bet * 5000000) currentPayout = game.bet * 5000000;
+    if (currentPayout > game.bet * 5000000) currentPayout = game.bet * 5000000;
     game.currentWin = currentPayout;
 
-    res.json({ 
-        status: "SAFE", 
-        payout: currentPayout, 
+    return res.json({
+        status: "SAFE",
+        payout: currentPayout,
         multiplier: currentPayout / game.baseBet,
-        step: stepIndex, // For UI highlight
-        special: specialData 
+        step: stepIndex,
+        special: specialData
     });
 });
 
-// 4. CASH OUT
+// 4. CASH OUT (FIXED: Includes Proof Fields)
 app.post('/api/cashout', (req, res) => {
     const game = db.activeGame;
     if(!game || game.isOver) return res.status(400).json({error: "No active game"});
@@ -217,7 +234,12 @@ app.post('/api/cashout', (req, res) => {
         balance: db.balance,
         finalMultiplier: game.currentWin / game.baseBet,
         mineMap: game.mines,
-        specialMap: game.specialItems
+        specialMap: game.specialItems,
+
+        // ✅ proof fields
+        serverSeed: db.serverSeed,
+        clientSeed: game.clientSeed,
+        nonce: db.nonce
     });
 });
 
