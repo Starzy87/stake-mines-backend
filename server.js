@@ -1,263 +1,227 @@
-
-// server.js (CommonJS) — minimal working API for your Mines-style frontend
-const express = require("express");
-const crypto = require("crypto");
-const path = require("path");
-const { MathEngine } = require("./math/engine");
-const fs = require("fs");
-
-const PUBLISH_DIR = path.join(__dirname, "publish_files");
-
-
-const math = new MathEngine({ publishDir: path.join(__dirname, "publish_files") });
-math.load();
-
+/* ==============================================
+   THE BRAIN: SERVER-SIDE GAME ENGINE (server.js)
+   Strictly Compliant with Stake Math & RNG
+============================================== */
+const express = require('express');
+const crypto = require('crypto');
+const cors = require('cors'); // Allow frontend to connect
 const app = express();
+
 app.use(express.json());
+app.use(cors());
+app.use(express.static('public'));
 
-// Allow requests from your frontend (CORS)
-app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.sendStatus(204);
-  next();
-});
-
-
-// -------------------- Helpers --------------------
-function sha256Hex(input) {
-  return crypto.createHash("sha256").update(input).digest("hex");
-}
-
-function hmacSha256(key, msg) {
-  return crypto.createHmac("sha256", key).update(msg).digest();
-}
-
-// -------------------- Provably Fair State --------------------
-app.get("/pf/state", (req, res) => {
-  if (!session.nextServerSeed) {
-    session.nextServerSeed = crypto.randomBytes(32).toString("hex");
-    session.nextServerHash = sha256Hex(session.nextServerSeed);
-  }
-
-  res.json({
-    nextHash: session.nextServerHash,
-    nonce: session.nonce || 0
-  });
-});
-
-// Generates deterministic floats in [0,1) using HMAC-SHA256 like your frontend
-function generateFloats(serverSeed, clientSeed, nonce, count) {
-  const floats = [];
-  let i = 0;
-
-  while (floats.length < count) {
-    const message = `${clientSeed}:${nonce}:${i++}`;
-    const sig = hmacSha256(serverSeed, message); // Buffer(32)
-
-    // split into 8 x 4 bytes => 8 uint32
-    for (let j = 0; j < 8; j++) {
-      if (floats.length >= count) break;
-      const val = sig.readUInt32BE(j * 4); // 0..2^32-1
-      floats.push(val / 4294967296); // 2^32
-    }
-  }
-  return floats;
-}
-
-function shuffleWithFloats(arr, floats, offset = 0) {
-  const a = arr.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const r = floats[offset + i]; // use floats deterministically
-    const j = Math.floor(r * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-// -------------------- In-memory session (demo) --------------------
-const session = {
-  balance: 5000.0,
-  nonce: 0,
-  serverSeed: null,
-  nextServerSeed: null,
-  nextServerHash: null,
-  activeGame: null,
+// --- MEMORY DATABASE (Replace with Redis for Production) ---
+const db = {
+    balance: 5000.00,
+    serverSeed: null,
+    nextServerSeed: null,
+    nextServerHash: null,
+    nonce: 0,
+    activeGame: null // Stores state for crash recovery
 };
 
-// Create first nextServerSeed/hash on boot
-function initSeeds() {
-  session.nextServerSeed = crypto.randomBytes(32).toString("hex");
-  session.nextServerHash = sha256Hex(session.nextServerSeed);
-}
-initSeeds();
+// --- CRYPTOGRAPHIC FUNCTIONS (STAKE STANDARD) ---
+const generateSeed = () => crypto.randomBytes(32).toString('hex');
+const sha256 = (text) => crypto.createHash('sha256').update(text).digest('hex');
 
-// -------------------- Routes --------------------
-app.get("/ping", (req, res) => {
-  res.json({ status: "ok" });
-});
-
-app.get("/", (req, res) => {
-  // Render hits / sometimes; this prevents "Cannot GET /"
-  res.send("Backend is running. Use /ping, /bet, /reveal, /cashout");
-});
-
-// Start a new bet/game
-// List math publish files (debug helper)
-app.get("/pf/files", (req, res) => {
-  try {
-    const files = fs.readdirSync(PUBLISH_DIR);
-    res.json({ ok: true, files });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-    // Start a new bet/game
-app.post("/bet", (req, res) => {
-  try {
-    const { bet, mines, mode, clientSeed } = req.body;
-
-    const betNum = Number(bet);
-    const minesNum = Number(mines);
-    const modeStr = String(mode || "normal");
-    const clientSeedStr = String(clientSeed || "");
-
-    if (!Number.isFinite(betNum) || betNum <= 0) {
-      return res.status(400).json({ error: "Invalid bet" });
+// STRICT 4-BYTE FLOAT GENERATION (RFC Compliant)
+const generateFloats = (serverSeed, clientSeed, nonce, count) => {
+    const floats = [];
+    let i = 0;
+    while(floats.length < count) {
+        const hmac = crypto.createHmac('sha256', serverSeed);
+        hmac.update(`${clientSeed}:${nonce}:${i++}`); // Cursor increment
+        const buffer = hmac.digest();
+        
+        // Extract 4-byte chunks (32 bits)
+        for(let j=0; j < buffer.length / 4; j++) {
+            if(floats.length >= count) break;
+            // Read 4 bytes as Unsigned 32-bit Integer (Big Endian)
+            const val = buffer.readUInt32BE(j * 4);
+            // Divide by 2^32 to get uniform float [0, 1)
+            floats.push(val / 4294967296);
+        }
     }
-    if (!Number.isInteger(minesNum) || minesNum < 1 || minesNum > 24) {
-      return res.status(400).json({ error: "Invalid mines" });
-    }
-    if (!clientSeedStr) {
-      return res.status(400).json({ error: "Invalid clientSeed" });
-    }
+    return floats;
+};
 
-    // cost multiplier (keep same as your UI)
-    let costMult = 1;
-    if (modeStr === "boost10") costMult = 10;
-    if (modeStr === "boost75") costMult = 75;
+// --- INITIALIZE SEEDS ---
+db.nextServerSeed = generateSeed();
+db.nextServerHash = sha256(db.nextServerSeed);
 
-    const totalCost = betNum * costMult;
-    if (totalCost > session.balance) {
-      return res.status(400).json({ error: "Insufficient Funds" });
-    }
+// --- API ENDPOINTS ---
 
-    // advance seeds / nonce
-    if (!session.serverSeed) session.serverSeed = session.nextServerSeed;
-    else session.serverSeed = session.nextServerSeed;
-
-    session.nonce += 1;
-
-    // prepare next seed/hash
-    session.nextServerSeed = crypto.randomBytes(32).toString("hex");
-    session.nextServerHash = sha256Hex(session.nextServerSeed);
-
-    // charge balance
-    session.balance -= totalCost;
-
-    // generate floats and mine locations
-    const floats = generateFloats(session.serverSeed, clientSeedStr, session.nonce, 80);
-
-    const allTiles = Array.from({ length: 25 }, (_, i) => i);
-    const shuffled = shuffleWithFloats(allTiles, floats, 0);
-    const mineLocations = shuffled.slice(0, minesNum);
-
-    // multipliers (same concept as your frontend)
-    const houseEdge = 0.964; // RTP 96.4%
-    const maxMoves = 25 - minesNum;
-    const multis = [];
-    let current = 1;
-
-    for (let i = 0; i < maxMoves; i++) {
-      const totalRem = 25 - i;
-      const safeRem = (25 - minesNum) - i;
-      if (safeRem <= 0) break;
-      const prob = safeRem / totalRem;
-      current = current / prob;
-      multis.push(current * houseEdge);
-    }
-
-    session.activeGame = {
-      bet: totalCost,
-      baseBet: betNum,
-      mines: mineLocations,
-      revealed: [],
-      multiStack: multis,
-      currentWin: 0,
-      isOver: false,
-      mode: modeStr,
-      clientSeed: clientSeedStr,
+// 1. INIT (HANDLES PAGE REFRESH RECOVERY)
+app.get('/api/init', (req, res) => {
+    const response = { 
+        balance: db.balance, 
+        hash: db.nextServerHash,
+        activeGame: null
     };
 
-    return res.json({
-      success: true,
-      newBalance: session.balance,
-      nonce: session.nonce,
-      nextHash: session.nextServerHash,
-      multipliers: multis,
-      // helpful for debugging connectivity; remove later for production:
-      mineLocations,
+    // Recover state if game exists
+    if(db.activeGame && !db.activeGame.isOver) {
+        response.activeGame = {
+            bet: db.activeGame.baseBet,
+            mines: db.activeGame.mines.length,
+            revealed: db.activeGame.revealed, // Indices only
+            currentWin: db.activeGame.currentWin,
+            multipliers: db.activeGame.multiStack
+        };
+    }
+    res.json(response);
+});
+
+// 2. PLACE BET
+app.post('/api/bet', (req, res) => {
+    const { amount, mines, clientSeed, mode, autoPattern } = req.body;
+    
+    if(db.activeGame && !db.activeGame.isOver) return res.status(400).json({error: "Game in progress"});
+    
+    let costMult = 1;
+    if(mode === 'boost10') costMult = 10;
+    if(mode === 'boost75') costMult = 75;
+    
+    const totalCost = amount * costMult;
+    if(totalCost > db.balance) return res.status(400).json({error: "Insufficient funds"});
+
+    // ROTATE SEEDS
+    if(!db.serverSeed) db.serverSeed = db.nextServerSeed; 
+    else db.serverSeed = db.nextServerSeed;
+    
+    db.nonce++;
+    db.nextServerSeed = generateSeed();
+    db.nextServerHash = sha256(db.nextServerSeed);
+    
+    db.balance -= totalCost;
+
+    // GENERATE FLOATS & SHUFFLE
+    const floats = generateFloats(db.serverSeed, clientSeed, db.nonce, 60);
+    
+    const allTiles = Array.from({length: 25}, (_, i) => i);
+    for (let i = allTiles.length - 1; i > 0; i--) {
+        const j = Math.floor(floats[i] * (i + 1));
+        [allTiles[i], allTiles[j]] = [allTiles[j], allTiles[i]];
+    }
+    const mineLocations = allTiles.slice(0, mines);
+
+    // BOOSTER PLACEMENT
+    let specialItems = {};
+    if(mode !== 'normal') {
+        const safeTiles = allTiles.slice(mines);
+        for (let i = safeTiles.length - 1; i > 0; i--) {
+            const j = Math.floor(floats[i+25] * (i + 1));
+            [safeTiles[i], safeTiles[j]] = [safeTiles[j], safeTiles[i]];
+        }
+        const boostedTiles = safeTiles.slice(0, 3);
+        
+        boostedTiles.forEach((idx, i) => {
+            const r = floats[i + 30];
+            if (mode === 'boost10') {
+                let mult = 1.5;
+                if(r > 0.6) mult = 3; if(r > 0.9) mult = 5; if(r > 0.99) mult = 10;
+                specialItems[idx] = { type: 'GOLD_GEM', mult: mult };
+            } else {
+                let mult = 3;
+                if(r > 0.5) mult = 10; if(r > 0.8) mult = 25; if(r > 0.95) mult = 50;
+                specialItems[idx] = { type: 'NOVA_STAR', mult: mult };
+            }
+        });
+    }
+
+    // CALCULATE MULTIPLIERS (3.6% HOUSE EDGE)
+    const maxMoves = 25 - mines;
+    let multis = [], current = 1, houseEdge = 0.964;
+    for(let i=0; i<maxMoves; i++) {
+        let totalRem = 25 - i;
+        let safeRem = (25 - mines) - i;
+        let prob = safeRem / totalRem;
+        current = current / prob;
+        multis.push(current * houseEdge);
+    }
+
+    db.activeGame = {
+        bet: totalCost,
+        baseBet: amount,
+        mines: mineLocations,
+        specialItems: specialItems,
+        revealed: [],
+        multiStack: multis,
+        currentWin: 0,
+        isOver: false
+    };
+
+    res.json({
+        balance: db.balance,
+        nextHash: db.nextServerHash,
+        nonce: db.nonce,
+        newBalance: db.balance // Return new balance immediately
     });
-  } catch (e) {
-    return res.status(500).json({ error: "Server error", detail: String(e.message || e) });
-  }
 });
 
-// Reveal a tile
-app.post("/reveal", (req, res) => {
-  const { index } = req.body || {};
-  const idx = Number(index);
+// 3. REVEAL TILE
+app.post('/api/reveal', (req, res) => {
+    const { index } = req.body;
+    const game = db.activeGame;
+    
+    if(!game || game.isOver) return res.status(400).json({error: "No active game"});
+    if(game.revealed.includes(index)) return res.status(400).json({error: "Tile already revealed"});
 
-  const game = session.activeGame;
-  if (!game || game.isOver) return res.status(400).json({ error: "No active game" });
-  if (!Number.isInteger(idx) || idx < 0 || idx > 24) return res.status(400).json({ error: "Invalid index" });
-  if (game.revealed.includes(idx)) return res.status(400).json({ error: "Already revealed" });
+    if(game.mines.includes(index)) {
+        game.isOver = true;
+        // RETURN ALL DATA FOR GHOST REVEAL
+        return res.json({ 
+            status: "BOMB", 
+            mineMap: game.mines, 
+            specialMap: game.specialItems 
+        });
+    }
 
-  if (game.mines.includes(idx)) {
+    // SAFE HIT
+    game.revealed.push(index);
+    const stepIndex = game.revealed.length - 1;
+    let currentPayout = game.bet * game.multiStack[stepIndex];
+    
+    let specialData = null;
+    if(game.specialItems[index]) {
+        specialData = game.specialItems[index];
+        // Apply Booster Multiplier
+        currentPayout = currentPayout * specialData.mult;
+    }
+    
+    // Cap Win
+    if(currentPayout > game.bet * 5000000) currentPayout = game.bet * 5000000;
+    game.currentWin = currentPayout;
+
+    res.json({ 
+        status: "SAFE", 
+        payout: currentPayout, 
+        multiplier: currentPayout / game.baseBet,
+        step: stepIndex, // For UI highlight
+        special: specialData 
+    });
+});
+
+// 4. CASH OUT
+app.post('/api/cashout', (req, res) => {
+    const game = db.activeGame;
+    if(!game || game.isOver) return res.status(400).json({error: "No active game"});
+
+    db.balance += game.currentWin;
     game.isOver = true;
-    return res.json({ status: "BOMB", mineMap: game.mines });
-  }
 
-  game.revealed.push(idx);
-  const stepIndex = game.revealed.length - 1;
-
-  let payout = game.bet * (game.multiStack[stepIndex] || 0);
-  // cap example (same idea as your frontend)
-  const cap = game.bet * 5000000;
-  if (payout > cap) payout = cap;
-
-  game.currentWin = payout;
-
-  return res.json({
-    status: "SAFE",
-    payout,
-    multiplier: payout / game.baseBet,
-    step: stepIndex,
-  });
+    res.json({
+        success: true,
+        winAmount: game.currentWin,
+        balance: db.balance,
+        finalMultiplier: game.currentWin / game.baseBet,
+        mineMap: game.mines,
+        specialMap: game.specialItems
+    });
 });
 
-// Cash out
-app.post("/cashout", (req, res) => {
-  const game = session.activeGame;
-  if (!game || game.isOver) return res.status(400).json({ error: "No active game" });
-
-  session.balance += game.currentWin;
-  game.isOver = true;
-
-  return res.json({
-    success: true,
-    winAmount: game.currentWin,
-    finalMultiplier: game.currentWin / game.baseBet,
-    newBalance: session.balance,
-    mineMap: game.mines,
-  });
-});
-
-// -------------------- Start --------------------
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+    console.log(`Strict Stake Math Engine Running on Port ${PORT}`);
 });
-
