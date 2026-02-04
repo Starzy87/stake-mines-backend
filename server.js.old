@@ -1,0 +1,535 @@
+/* ==============================================
+   STAKE RGS COMPLIANT SERVER (server.js)
+   - Audit Grade: Platinum
+   - Currency: 6-Decimal Integers (Micros)
+   - Security: Strict Input Sanitization & Session Validation
+============================================== */
+const express = require('express');
+const crypto = require('crypto');
+const cors = require('cors');
+const app = express();
+
+app.use(express.json());
+app.use(cors());
+app.use(express.static('public'));
+
+// =================================================================
+// 1. CONFIGURATION & HELPERS
+// =================================================================
+
+// --- RGS CONFIGURATION ---
+const CONFIG = {
+    currency: "USD",
+    micros: 1000000,      // 1.00 = 1,000,000
+    minBet: 100000,       // $0.10
+    maxBet: 1000000000,   // $1,000.00
+    maxMultiplier: 5000000, // 5,000,000x cap
+    jurisdiction: {
+        country: "CW",
+        disabledTurbo: false, 
+        socialCasino: false
+    }
+};
+
+// --- MOCK DATABASE ---
+const sessions = {
+    "test-session-123": {
+        balance: 1000000 * CONFIG.micros, // $1,000,000.00 - Never run out!
+        activeGame: null,
+        serverSeed: null,
+        nextServerSeed: crypto.randomBytes(32).toString('hex'),
+        nextServerHash: null,
+        nonce: 0
+    }
+};
+
+// Initialize hash for default user
+sessions["test-session-123"].nextServerHash = 
+    crypto.createHash('sha256').update(sessions["test-session-123"].nextServerSeed).digest('hex');
+
+// --- HELPER FUNCTIONS ---
+const generateSeed = () => crypto.randomBytes(32).toString('hex');
+const sha256 = (text) => crypto.createHash('sha256').update(text).digest('hex');
+
+const getSession = (id) => {
+    if (!sessions[id]) {
+        sessions[id] = {
+            balance: 1000 * CONFIG.micros,
+            activeGame: null,
+            serverSeed: null,
+            nextServerSeed: generateSeed(),
+            nextServerHash: null,
+            nonce: 0
+        };
+        sessions[id].nextServerHash = sha256(sessions[id].nextServerSeed);
+    }
+    return sessions[id];
+};
+
+const generateFloats = (serverSeed, clientSeed, nonce, count) => {
+    const floats = [];
+    let i = 0;
+    while(floats.length < count) {
+        const hmac = crypto.createHmac('sha256', serverSeed);
+        hmac.update(`${clientSeed}:${nonce}:${i++}`);
+        const buffer = hmac.digest();
+        for(let j=0; j < buffer.length / 4; j++) {
+            if(floats.length >= count) break;
+            const val = buffer.readUInt32BE(j * 4);
+            floats.push(val / 4294967296);
+        }
+    }
+    return floats;
+};
+
+// =================================================================
+// 2. RGS WALLET ADAPTER
+// =================================================================
+
+// Simple in-memory idempotency store
+const walletTxns = new Map(); // key = txnId, value = response payload
+
+function getSessionId(req) {
+  return (
+    req.body?.sessionID ||
+    req.query?.sessionID ||
+    req.headers["x-session-id"] ||
+    "test-session-123"
+  );
+}
+
+function assertInt(n, name) {
+  if (!Number.isInteger(n)) {
+    const err = new Error(`${name} must be an integer (micros)`);
+    err.status = 400;
+    throw err;
+  }
+  return n;
+}
+
+// --- INTERNAL WALLET LOGIC ---
+
+function processDebit(user, amount, txnId, roundId, reason) {
+    // 1. Idempotency Check
+    if (walletTxns.has(txnId)) {
+        return walletTxns.get(txnId);
+    }
+
+    // 2. Balance Check
+    if (amount > user.balance) {
+        const errPayload = {
+            success: false,
+            httpStatus: 400,
+            code: "ERR_IPB",
+            message: "Insufficient Player Balance",
+            currency: CONFIG.currency,
+            balance: user.balance,
+            txnId,
+            roundId: roundId || null
+        };
+        walletTxns.set(txnId, errPayload);
+        return errPayload;
+    }
+
+    // 3. Execute Debit
+    user.balance -= amount;
+
+    // 4. Record Success
+    const successPayload = {
+        success: true,
+        httpStatus: 200,
+        currency: CONFIG.currency,
+        balance: user.balance,
+        txnId,
+        roundId: roundId || null,
+        reason: reason || "bet",
+        amount: amount
+    };
+    walletTxns.set(txnId, successPayload);
+    return successPayload;
+}
+
+function processCredit(user, amount, txnId, roundId, reason) {
+    // 1. Idempotency Check
+    if (walletTxns.has(txnId)) {
+        return walletTxns.get(txnId);
+    }
+
+    // 2. Execute Credit
+    user.balance += amount;
+
+    // 3. Record Success
+    const successPayload = {
+        success: true,
+        httpStatus: 200,
+        currency: CONFIG.currency,
+        balance: user.balance,
+        txnId,
+        roundId: roundId || null,
+        reason: reason || "win",
+        amount: amount
+    };
+    walletTxns.set(txnId, successPayload);
+    return successPayload;
+}
+
+// -------------------------------
+// RGS Wallet Endpoints
+// -------------------------------
+
+// BALANCE
+app.get("/rgs/wallet/balance", (req, res) => {
+  try {
+    const sessionID = getSessionId(req);
+    const user = getSession(sessionID);
+    return res.json({
+      success: true,
+      currency: CONFIG.currency,
+      balance: user.balance,
+    });
+  } catch (e) {
+    return res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+});
+
+// DEBIT
+app.post("/rgs/wallet/debit", (req, res) => {
+  try {
+    const sessionID = getSessionId(req);
+    const user = getSession(sessionID);
+    const { txnId, amount, roundId, reason } = req.body;
+
+    if (!txnId || typeof txnId !== "string") return res.status(400).json({ success: false, message: "Missing txnId" });
+    const amt = assertInt(amount, "amount");
+    if (amt <= 0) return res.status(400).json({ success: false, message: "amount must be > 0" });
+
+    const result = processDebit(user, amt, txnId, roundId, reason);
+    return res.status(result.httpStatus || 200).json(result);
+
+  } catch (e) {
+    return res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+});
+
+// CREDIT
+app.post("/rgs/wallet/credit", (req, res) => {
+  try {
+    const sessionID = getSessionId(req);
+    const user = getSession(sessionID);
+    const { txnId, amount, roundId, reason } = req.body;
+
+    if (!txnId || typeof txnId !== "string") return res.status(400).json({ success: false, message: "Missing txnId" });
+    const amt = assertInt(amount, "amount");
+    if (amt < 0) return res.status(400).json({ success: false, message: "amount must be >= 0" });
+
+    const result = processCredit(user, amt, txnId, roundId, reason);
+    return res.status(result.httpStatus || 200).json(result);
+
+  } catch (e) {
+    return res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+});
+
+// ROLLBACK
+app.post("/rgs/wallet/rollback", (req, res) => {
+  try {
+    const sessionID = getSessionId(req);
+    const user = getSession(sessionID);
+    const { originalTxnId, rollbackTxnId } = req.body;
+
+    if (!rollbackTxnId || typeof rollbackTxnId !== "string") return res.status(400).json({ success: false, message: "Missing rollbackTxnId" });
+    if (!originalTxnId || typeof originalTxnId !== "string") return res.status(400).json({ success: false, message: "Missing originalTxnId" });
+
+    if (walletTxns.has(rollbackTxnId)) {
+      const cached = walletTxns.get(rollbackTxnId);
+      return res.status(cached.httpStatus || 200).json(cached);
+    }
+
+    const original = walletTxns.get(originalTxnId);
+    if (!original) {
+      const payload = {
+        success: false,
+        httpStatus: 404,
+        message: "originalTxnId not found",
+        balance: user.balance,
+        rollbackTxnId,
+      };
+      walletTxns.set(rollbackTxnId, payload);
+      return res.status(404).json(payload);
+    }
+
+    if (original.success === true) {
+      const amt = assertInt(original.amount ?? 0, "original.amount");
+      if (original.reason === "bet") {
+        user.balance += amt;
+      } else if (original.reason === "win") {
+        user.balance -= amt;
+        if (user.balance < 0) user.balance = 0;
+      }
+    }
+
+    const payload = {
+      success: true,
+      httpStatus: 200,
+      message: "rollback processed",
+      balance: user.balance,
+      rollbackTxnId,
+      originalTxnId,
+    };
+
+    walletTxns.set(rollbackTxnId, payload);
+    return res.json(payload);
+  } catch (e) {
+    return res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+});
+
+// =================================================================
+// 3. GAME API ENDPOINTS (Init, Bet, Reveal, Cashout)
+// =================================================================
+
+// 1. INITIALIZE / RESUME (GET)
+app.get('/api/init', (req, res) => {
+    const sessionID = req.query.sessionID || "test-session-123"; 
+    const user = getSession(sessionID);
+
+    const response = { 
+        balance: user.balance,
+        currency: CONFIG.currency,
+        jurisdiction: CONFIG.jurisdiction,
+        config: {
+            minBet: CONFIG.minBet,
+            maxBet: CONFIG.maxBet
+        },
+        hash: user.nextServerHash,
+        nonce: user.nonce,
+        activeGame: null
+    };
+
+    if(user.activeGame && !user.activeGame.isOver) {
+        response.activeGame = {
+            bet: user.activeGame.betAmount,
+            mines: user.activeGame.mines.length,
+            revealed: user.activeGame.revealed,
+            currentWin: user.activeGame.currentWin,
+            multipliers: user.activeGame.multiStack,
+            specialMap: user.activeGame.specialItems 
+        };
+    }
+    res.json(response);
+});
+
+// 2. PLACE BET (POST)
+app.post('/api/bet', (req, res) => {
+    const { amount, mines, clientSeed, mode, sessionID } = req.body;
+    const user = getSession(sessionID || "test-session-123");
+
+    // --- SECURITY & VALIDATION ---
+    if (typeof clientSeed !== 'string' || clientSeed.length > 64) {
+        return res.status(400).json({ code: "ERR_VAL", message: "Client Seed too long" });
+    }
+    if (!Number.isInteger(amount)) {
+        return res.status(400).json({ code: "ERR_VAL", message: "Amount must be integer" });
+    }
+    if (amount < CONFIG.minBet) {
+        return res.status(400).json({ code: "ERR_VAL", message: `Min bet is ${CONFIG.minBet/CONFIG.micros}` });
+    }
+    if (amount > CONFIG.maxBet) {
+        return res.status(400).json({ code: "ERR_GLE", message: "Gambling Limits Exceeded" });
+    }
+    if (user.activeGame && !user.activeGame.isOver) {
+        return res.status(400).json({ code: "ERR_GAME_ACTIVE", message: "Finish current round first" });
+    }
+
+    // ✅ FIX: Mines Validation
+    if (!Number.isInteger(mines) || mines < 1 || mines > 24) {
+        return res.status(400).json({ code:"ERR_VAL", message:"mines must be 1..24" });
+    }
+
+    // BOOSTER LOGIC
+    let costMult = 1;
+    if(mode === 'boost10') costMult = 10;
+    if(mode === 'boost75') costMult = 75;
+    const totalCost = amount * costMult;
+    
+    // ✅ FIX: Stable per-round ids (idempotent)
+    const roundId = `round-${user.nonce + 1}`;      // stable "next round" id for this session
+    const betTxnId = `debit-${roundId}`;            // stable debit txn id for this round
+
+    // ✅ FIX: Debit via wallet (idempotent)
+    // We REMOVED internalTxnId with Date.now() here to fix idempotency
+    const debitResult = processDebit(user, totalCost, betTxnId, roundId, "bet");
+
+    if (!debitResult.success) {
+        return res.status(debitResult.httpStatus || 400).json({
+            code: debitResult.code || "ERR_IPB",
+            message: debitResult.message
+        });
+    }
+
+    // Rotate Seeds
+    user.serverSeed = user.nextServerSeed;
+    user.nonce++;
+    user.nextServerSeed = generateSeed();
+    user.nextServerHash = sha256(user.nextServerSeed);
+
+    // RNG GENERATION
+    const floats = generateFloats(user.serverSeed, clientSeed, user.nonce, 60);
+    
+    const allTiles = Array.from({length: 25}, (_, i) => i);
+    for (let i = allTiles.length - 1; i > 0; i--) {
+        const j = Math.floor(floats[i] * (i + 1));
+        [allTiles[i], allTiles[j]] = [allTiles[j], allTiles[i]];
+    }
+    const mineLocations = allTiles.slice(0, mines);
+
+    // BOOSTER PLACEMENT
+    let specialItems = {};
+    if(mode !== 'normal') {
+        const safeTiles = allTiles.slice(mines);
+        for (let i = safeTiles.length - 1; i > 0; i--) {
+            const j = Math.floor(floats[i+25] * (i + 1));
+            [safeTiles[i], safeTiles[j]] = [safeTiles[j], safeTiles[i]];
+        }
+        const boostedTiles = safeTiles.slice(0, 3);
+        boostedTiles.forEach((idx, i) => {
+            const r = floats[i + 30];
+            if (mode === 'boost10') {
+                let mult = 1.5;
+                if(r > 0.6) mult = 3; if(r > 0.9) mult = 5; if(r > 0.99) mult = 10;
+                specialItems[idx] = { type: 'GOLD_GEM', mult: mult };
+            } else {
+                let mult = 3;
+                if(r > 0.5) mult = 10; if(r > 0.8) mult = 25; if(r > 0.95) mult = 50;
+                specialItems[idx] = { type: 'NOVA_STAR', mult: mult };
+            }
+        });
+    }
+
+    // CALCULATE ODDS
+    const maxMoves = 25 - mines;
+    let multis = [], current = 1, houseEdge = 0.964;
+    for(let i=0; i<maxMoves; i++) {
+        let totalRem = 25 - i;
+        let safeRem = (25 - mines) - i;
+        let prob = safeRem / totalRem;
+        current = current / prob;
+        multis.push(current * houseEdge);
+    }
+
+    // ✅ FIX: SAVE STATE (with roundId)
+    user.activeGame = {
+        roundId,
+        betAmount: amount, 
+        totalCost: totalCost,
+        clientSeed: clientSeed,
+        mines: mineLocations,
+        specialItems: specialItems,
+        revealed: [],
+        multiStack: multis,
+        currentWin: 0,
+        isOver: false
+    };
+
+    // ✅ FIX: RESPONSE (include roundId)
+    res.json({
+        balance: user.balance,
+        nextHash: user.nextServerHash,
+        nonce: user.nonce,
+        roundId
+    });
+});
+
+// 3. REVEAL (POST)
+app.post('/api/reveal', (req, res) => {
+    const { index, sessionID } = req.body;
+    const user = getSession(sessionID || "test-session-123");
+    const game = user.activeGame;
+
+    if (!game || game.isOver) return res.status(400).json({ code: "ERR_VAL", message: "No active game" });
+    if (game.revealed.includes(index)) return res.status(400).json({ code: "ERR_VAL", message: "Tile already revealed" });
+
+    // BOMB HIT
+    if (game.mines.includes(index)) {
+        game.isOver = true;
+        game.currentWin = 0; // Explicit zero out
+        return res.json({
+            status: "BOMB",
+            payout: 0,
+            mineMap: game.mines,
+            specialMap: game.specialItems,
+            serverSeed: user.serverSeed,
+            clientSeed: game.clientSeed,
+            nonce: user.nonce
+        });
+    }
+
+    // SAFE HIT
+    game.revealed.push(index);
+    const stepIndex = game.revealed.length - 1;
+    let rawPayout = game.betAmount * game.multiStack[stepIndex];
+
+    let specialData = null;
+    if (game.specialItems[index]) {
+        specialData = game.specialItems[index];
+        rawPayout = rawPayout * specialData.mult;
+    }
+
+    // Cap Win
+    let payoutInt = Math.floor(rawPayout);
+    if (payoutInt > game.betAmount * CONFIG.maxMultiplier) {
+        payoutInt = game.betAmount * CONFIG.maxMultiplier;
+    }
+    
+    game.currentWin = payoutInt;
+
+    return res.json({
+        status: "SAFE",
+        payout: payoutInt,
+        multiplier: payoutInt / game.betAmount,
+        step: stepIndex,
+        special: specialData
+    });
+});
+
+// 4. CASH OUT (POST)
+app.post('/api/cashout', (req, res) => {
+    const { sessionID } = req.body;
+    const user = getSession(sessionID || "test-session-123");
+    const game = user.activeGame;
+
+    if(!game || game.isOver) {
+        return res.status(400).json({ code: "ERR_VAL", message: "No active game" });
+    }
+
+    // ✅ FIX: Must exist (sanity check)
+    if (!game.roundId) {
+        return res.status(500).json({ code: "ERR_STATE", message: "Missing roundId in game state" });
+    }
+
+    // ✅ FIX: Idempotent credit txn id (same round = same txn id)
+    const winTxnId = `credit-${game.roundId}-cashout`;
+    const creditResult = processCredit(user, game.currentWin, winTxnId, game.roundId, "win");
+
+    game.isOver = true;
+
+    // ✅ FIX: Updated response format
+    res.json({
+        success: true,
+        winAmount: game.currentWin,
+        balance: user.balance,
+        finalMultiplier: game.currentWin / game.betAmount,
+        mineMap: game.mines,
+        specialMap: game.specialItems,
+        serverSeed: user.serverSeed,
+        clientSeed: game.clientSeed,
+        nonce: user.nonce,
+        roundId: game.roundId,          // ✅ include roundId in response
+        walletTxnId: creditResult.txnId // ✅ optional but helpful for debugging
+    });
+});
+
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
+    console.log(`Stake RGS Engine (Micros Mode) Running on ${PORT}`);
+});

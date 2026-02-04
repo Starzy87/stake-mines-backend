@@ -10,7 +10,7 @@ const MODE_NAME = "base";
 const COST = 1.0;
 
 // Quick dev run (increase later to 100k+)
-const NUM_SIMS = 2000;
+const NUM_SIMS = 10000;
 
 // Seeds for deterministic generation (replace later with real workflow)
 const SERVER_SEED = "ServerSeed_FOR_TEST_ONLY";

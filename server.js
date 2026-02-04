@@ -1,249 +1,267 @@
 /* ==============================================
-   THE BRAIN: SERVER-SIDE GAME ENGINE (server.js)
-   Strictly Compliant with Stake Math & RNG
+   STAKE RGS COMPLIANT SERVER - WITH WALLET ENDPOINTS
+   Reads from your pre-generated simulation files
 ============================================== */
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
-const cors = require('cors'); // Allow frontend to connect
+const cors = require('cors');
+const { execSync } = require('child_process');
+
 const app = express();
 
 app.use(express.json());
 app.use(cors());
 app.use(express.static('public'));
 
-// --- MEMORY DATABASE (Replace with Redis for Production) ---
-const db = {
-    balance: 5000.00,
-    serverSeed: null,
-    nextServerSeed: null,
-    nextServerHash: null,
-    nonce: 0,
-    activeGame: null // Stores state for crash recovery
-};
-
-// --- CRYPTOGRAPHIC FUNCTIONS (STAKE STANDARD) ---
-const generateSeed = () => crypto.randomBytes(32).toString('hex');
-const sha256 = (text) => crypto.createHash('sha256').update(text).digest('hex');
-
-// STRICT 4-BYTE FLOAT GENERATION (RFC Compliant)
-const generateFloats = (serverSeed, clientSeed, nonce, count) => {
-    const floats = [];
-    let i = 0;
-    while(floats.length < count) {
-        const hmac = crypto.createHmac('sha256', serverSeed);
-        hmac.update(`${clientSeed}:${nonce}:${i++}`); // Cursor increment
-        const buffer = hmac.digest();
-        
-        // Extract 4-byte chunks (32 bits)
-        for(let j=0; j < buffer.length / 4; j++) {
-            if(floats.length >= count) break;
-            // Read 4 bytes as Unsigned 32-bit Integer (Big Endian)
-            const val = buffer.readUInt32BE(j * 4);
-            // Divide by 2^32 to get uniform float [0, 1)
-            floats.push(val / 4294967296);
-        }
+// =================================================================
+// CONFIGURATION
+// =================================================================
+const CONFIG = {
+    currency: "USD",
+    micros: 1000000,
+    minBet: 100000,       // $0.10
+    maxBet: 1000000000,   // $1,000.00
+    stepBet: 100000,
+    defaultBetLevel: 1000000,
+    betLevels: [100000, 200000, 500000, 1000000, 2000000, 5000000, 10000000],
+    jurisdiction: {
+        country: "US",
+        socialCasino: false,
+        disabledFullscreen: false,
+        disabledTurbo: false
     }
-    return floats;
 };
 
-// --- INITIALIZE SEEDS ---
-db.nextServerSeed = generateSeed();
-db.nextServerHash = sha256(db.nextServerSeed);
+// Mock sessions
+const sessions = {
+    "test-session-123": {
+        balance: 1000 * CONFIG.micros, // $1,000 starting balance
+        activeRound: null,
+        currency: "USD"
+    }
+};
 
-// --- API ENDPOINTS ---
+// =================================================================
+// LOAD SIMULATION FILES
+// =================================================================
+let simulations = [];
+let lookupTable = [];
 
-// 1. INIT (HANDLES PAGE REFRESH RECOVERY)
-app.get('/api/init', (req, res) => {
-    const response = { 
-        balance: db.balance, 
-        hash: db.nextServerHash,   // commitment for NEXT round
-        nonce: db.nonce,
-        activeGame: null
-    };
+function loadSimulations() {
+    try {
+        // Decompress and load the .zst file
+        const zstPath = path.join(__dirname, 'public/publish_files/books_base.jsonl.zst');
+        const jsonlData = execSync(`zstd -d -c "${zstPath}"`, { maxBuffer: 100 * 1024 * 1024 }).toString();
+        
+        // Parse JSONL
+        simulations = jsonlData.trim().split('\n').map(line => JSON.parse(line));
+        
+        console.log(`✅ Loaded ${simulations.length} simulations from books_base.jsonl.zst`);
+        
+        // Load CSV lookup table
+        const csvPath = path.join(__dirname, 'public/publish_files/lookUpTable_base_0.csv');
+        const csvData = fs.readFileSync(csvPath, 'utf8');
+        
+        lookupTable = csvData.trim().split('\n').map(line => {
+            const [id, weight, payout] = line.split(',');
+            return { id: parseInt(id), weight: parseInt(weight), payout: parseInt(payout) };
+        });
+        
+        console.log(`✅ Loaded ${lookupTable.length} entries from lookup table`);
+    } catch (error) {
+        console.error('❌ Error loading simulation files:', error.message);
+        console.log('⚠️  Running without simulation files - using mock data');
+    }
+}
 
-    // Recover state if game exists
-    if(db.activeGame && !db.activeGame.isOver) {
-        response.activeGame = {
-            bet: db.activeGame.baseBet,
-            mines: db.activeGame.mines.length,
-            revealed: db.activeGame.revealed, // Indices only
-            currentWin: db.activeGame.currentWin,
-            multipliers: db.activeGame.multiStack
+// Load on startup
+loadSimulations();
+
+// =================================================================
+// WALLET ENDPOINTS (STAKE RGS)
+// =================================================================
+
+// Authenticate
+app.post('/wallet/authenticate', (req, res) => {
+    const { sessionID } = req.body;
+    
+    if (!sessionID) {
+        return res.status(400).json({ 
+            code: 'ERR_MISSING_PARAM',
+            message: 'sessionID required' 
+        });
+    }
+    
+    // Get or create session
+    if (!sessions[sessionID]) {
+        sessions[sessionID] = {
+            balance: 1000 * CONFIG.micros,
+            activeRound: null,
+            currency: "USD"
         };
     }
-    res.json(response);
+    
+    const session = sessions[sessionID];
+    
+    res.json({
+        balance: {
+            amount: session.balance,
+            currency: session.currency
+        },
+        config: {
+            minBet: CONFIG.minBet,
+            maxBet: CONFIG.maxBet,
+            stepBet: CONFIG.stepBet,
+            defaultBetLevel: CONFIG.defaultBetLevel,
+            betLevels: CONFIG.betLevels,
+            jurisdiction: CONFIG.jurisdiction
+        },
+        round: session.activeRound || null
+    });
 });
 
-// 2. PLACE BET
-app.post('/api/bet', (req, res) => {
-    const { amount, mines, clientSeed, mode, autoPattern } = req.body;
+// Get Balance
+app.post('/wallet/balance', (req, res) => {
+    const { sessionID } = req.body;
     
-    // ✅ Basic validation
-    if (!Number.isFinite(amount) || amount <= 0) {
-        return res.status(400).json({ error: "Invalid bet amount" });
-    }
-    if (!Number.isInteger(mines) || mines < 1 || mines > 24) {
-        return res.status(400).json({ error: "Invalid mines count" });
-    }
-    if (typeof clientSeed !== "string" || clientSeed.length < 1 || clientSeed.length > 64) {
-        return res.status(400).json({ error: "Invalid client seed" });
+    const session = sessions[sessionID];
+    if (!session) {
+        return res.status(400).json({ 
+            code: 'ERR_IS',
+            message: 'Invalid session' 
+        });
     }
     
-    if(db.activeGame && !db.activeGame.isOver) return res.status(400).json({error: "Game in progress"});
-    
-    let costMult = 1;
-    if(mode === 'boost10') costMult = 10;
-    if(mode === 'boost75') costMult = 75;
-    
-    const totalCost = amount * costMult;
-    if(totalCost > db.balance) return res.status(400).json({error: "Insufficient funds"});
-
-    // ✅ Rotate seeds (use the committed seed for THIS round)
-    db.serverSeed = db.nextServerSeed;
-    
-    db.nonce++;
-    db.nextServerSeed = generateSeed();
-    db.nextServerHash = sha256(db.nextServerSeed);
-    
-    db.balance -= totalCost;
-
-    // GENERATE FLOATS & SHUFFLE
-    const floats = generateFloats(db.serverSeed, clientSeed, db.nonce, 60);
-    
-    const allTiles = Array.from({length: 25}, (_, i) => i);
-    for (let i = allTiles.length - 1; i > 0; i--) {
-        const j = Math.floor(floats[i] * (i + 1));
-        [allTiles[i], allTiles[j]] = [allTiles[j], allTiles[i]];
-    }
-    const mineLocations = allTiles.slice(0, mines);
-
-    // BOOSTER PLACEMENT
-    let specialItems = {};
-    if(mode !== 'normal') {
-        const safeTiles = allTiles.slice(mines);
-        for (let i = safeTiles.length - 1; i > 0; i--) {
-            const j = Math.floor(floats[i+25] * (i + 1));
-            [safeTiles[i], safeTiles[j]] = [safeTiles[j], safeTiles[i]];
+    res.json({
+        balance: {
+            amount: session.balance,
+            currency: session.currency
         }
-        const boostedTiles = safeTiles.slice(0, 3);
-        
-        boostedTiles.forEach((idx, i) => {
-            const r = floats[i + 30];
-            if (mode === 'boost10') {
-                let mult = 1.5;
-                if(r > 0.6) mult = 3; if(r > 0.9) mult = 5; if(r > 0.99) mult = 10;
-                specialItems[idx] = { type: 'GOLD_GEM', mult: mult };
-            } else {
-                let mult = 3;
-                if(r > 0.5) mult = 10; if(r > 0.8) mult = 25; if(r > 0.95) mult = 50;
-                specialItems[idx] = { type: 'NOVA_STAR', mult: mult };
-            }
+    });
+});
+
+// Play (Start Round)
+app.post('/wallet/play', (req, res) => {
+    const { sessionID, amount, mode = 'base' } = req.body;
+    
+    const session = sessions[sessionID];
+    if (!session) {
+        return res.status(400).json({ 
+            code: 'ERR_IS',
+            message: 'Invalid session' 
         });
     }
-
-    // CALCULATE MULTIPLIERS (3.6% HOUSE EDGE)
-    const maxMoves = 25 - mines;
-    let multis = [], current = 1, houseEdge = 0.964;
-    for(let i=0; i<maxMoves; i++) {
-        let totalRem = 25 - i;
-        let safeRem = (25 - mines) - i;
-        let prob = safeRem / totalRem;
-        current = current / prob;
-        multis.push(current * houseEdge);
-    }
-
-    db.activeGame = {
-        bet: totalCost,
-        baseBet: amount,
-        clientSeed: clientSeed,
-        mines: mineLocations,
-        specialItems: specialItems,
-        revealed: [],
-        multiStack: multis,
-        currentWin: 0,
-        isOver: false
-    };
-
-    res.json({
-        balance: db.balance,
-        nextHash: db.nextServerHash,
-        nonce: db.nonce,
-        newBalance: db.balance // Return new balance immediately
-    });
-});
-
-// 3. REVEAL TILE (FIXED: Distinguishes SAFE vs BOMB logic)
-app.post('/api/reveal', (req, res) => {
-    const { index } = req.body;
-    const game = db.activeGame;
-
-    if (!game || game.isOver) return res.status(400).json({ error: "No active game" });
-    if (game.revealed.includes(index)) return res.status(400).json({ error: "Tile already revealed" });
-
-    // 💣 BOMB
-    if (game.mines.includes(index)) {
-        game.isOver = true;
-        return res.json({
-            status: "BOMB",
-            mineMap: game.mines,
-            specialMap: game.specialItems,
-
-            // ✅ proof fields
-            serverSeed: db.serverSeed,
-            clientSeed: game.clientSeed,
-            nonce: db.nonce
+    
+    // Validate bet
+    if (amount < CONFIG.minBet || amount > CONFIG.maxBet) {
+        return res.status(400).json({
+            code: 'ERR_BET_LIMITS',
+            message: `Bet must be between ${CONFIG.minBet} and ${CONFIG.maxBet}`
         });
     }
-
-    // ✅ SAFE
-    game.revealed.push(index);
-    const stepIndex = game.revealed.length - 1;
-
-    let currentPayout = game.bet * game.multiStack[stepIndex];
-
-    let specialData = null;
-    if (game.specialItems[index]) {
-        specialData = game.specialItems[index];
-        currentPayout = currentPayout * specialData.mult;
+    
+    if (session.balance < amount) {
+        return res.status(400).json({
+            code: 'ERR_INSUFFICIENT_FUNDS',
+            message: 'Insufficient balance'
+        });
     }
-
-    // Cap Win
-    if (currentPayout > game.bet * 5000000) currentPayout = game.bet * 5000000;
-    game.currentWin = currentPayout;
-
-    return res.json({
-        status: "SAFE",
-        payout: currentPayout,
-        multiplier: currentPayout / game.baseBet,
-        step: stepIndex,
-        special: specialData
-    });
-});
-
-// 4. CASH OUT (FIXED: Includes Proof Fields)
-app.post('/api/cashout', (req, res) => {
-    const game = db.activeGame;
-    if(!game || game.isOver) return res.status(400).json({error: "No active game"});
-
-    db.balance += game.currentWin;
-    game.isOver = true;
-
+    
+    // Debit bet
+    session.balance -= amount;
+    
+    // Pick a random simulation
+    let round;
+    if (simulations.length > 0) {
+        const randomIndex = Math.floor(Math.random() * simulations.length);
+        round = JSON.parse(JSON.stringify(simulations[randomIndex])); // Deep copy
+        round.roundId = `round-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        round.betAmount = amount;
+    } else {
+        // Fallback mock round
+        round = {
+            id: Math.floor(Math.random() * 10000),
+            roundId: `round-${Date.now()}`,
+            betAmount: amount,
+            payoutMultiplier: 0,
+            events: [
+                { index: 0, type: 'roundStart', mines: 3, seedHash: crypto.randomBytes(16).toString('hex'), nonce: 0 },
+                { index: 1, type: 'revealSequence', revealedSafe: [], hitMineAt: 0, mineLocations: [0, 5, 10] },
+                { index: 2, type: 'setWin', amount: 0 },
+                { index: 3, type: 'finalWin', amount: 0 }
+            ]
+        };
+    }
+    
+    // Store active round
+    session.activeRound = round;
+    
     res.json({
-        success: true,
-        winAmount: game.currentWin,
-        balance: db.balance,
-        finalMultiplier: game.currentWin / game.baseBet,
-        mineMap: game.mines,
-        specialMap: game.specialItems,
-
-        // ✅ proof fields
-        serverSeed: db.serverSeed,
-        clientSeed: game.clientSeed,
-        nonce: db.nonce
+        balance: {
+            amount: session.balance,
+            currency: session.currency
+        },
+        round: round
     });
 });
 
-const PORT = process.env.PORT || 3000;
+// End Round
+app.post('/wallet/end-round', (req, res) => {
+    const { sessionID } = req.body;
+    
+    const session = sessions[sessionID];
+    if (!session) {
+        return res.status(400).json({ 
+            code: 'ERR_IS',
+            message: 'Invalid session' 
+        });
+    }
+    
+    if (!session.activeRound) {
+        return res.status(400).json({
+            code: 'ERR_NO_ROUND',
+            message: 'No active round'
+        });
+    }
+    
+    // Calculate payout
+    const round = session.activeRound;
+    const betAmountInDollars = round.betAmount / 1000000;
+    const payout = Math.floor(betAmountInDollars * round.payoutMultiplier);
+    
+    // ADD THE DEBUG LINES RIGHT HERE ↓↓↓
+    console.log('🔍 CASHOUT DEBUG:');
+    console.log('  Bet Amount (micros):', round.betAmount);
+    console.log('  Bet Amount (dollars):', betAmountInDollars);
+    console.log('  Payout Multiplier:', round.payoutMultiplier);
+    console.log('  Final Payout (micros):', payout);
+    console.log('  Final Payout (dollars):', payout / 1000000);
+    // ↑↑↑ ADD THE DEBUG LINES RIGHT HERE
+    
+    // Credit winnings
+    session.balance += payout;
+    
+    // Clear active round
+    session.activeRound = null;
+    
+    res.json({
+        balance: {
+            amount: session.balance,
+            currency: session.currency
+        }
+    });
+});
+
+// =================================================================
+// START SERVER
+// =================================================================
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-    console.log(`Strict Stake Math Engine Running on Port ${PORT}`);
+    console.log(`\n╔════════════════════════════════════════════╗`);
+    console.log(`║  STAKE RGS SERVER RUNNING ON PORT ${PORT}  ║`);
+    console.log(`╚════════════════════════════════════════════╝\n`);
+    console.log(`📁 Simulations: ${simulations.length}`);
+    console.log(`🎮 Test URL: http://localhost:${PORT}/?rgs_url=http://localhost:${PORT}&sessionID=test-session-123\n`);
 });

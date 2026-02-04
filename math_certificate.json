@@ -1,0 +1,11 @@
+{
+  "game": "Xtreme Mines",
+  "audit_type": "Standard Variance",
+  "rounds": 10000000,
+  "config": {
+    "mines": 3,
+    "strategy": "1-5 picks"
+  },
+  "rtp": "96.3737%",
+  "timestamp": "2026-01-08T23:04:08.678Z"
+}

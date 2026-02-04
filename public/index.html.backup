@@ -1,0 +1,1258 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Xtreme Mines | Stake Engine RGS</title>
+    <style>
+        /* --- VISUAL STYLES --- */
+        :root { 
+            --primary: #00e5ff; 
+            --bg-dark: #0f1216; 
+            --sidebar-bg: #1a2c38;
+            --input-bg: #0f212e;
+            --tile-bg: #2f4553; 
+            --tile-hover: #3c5260;
+            --tile-selected: #00e5ff;
+            --stake-green: #00e701;
+            --win: #4caf50; 
+            --booster-blue: #3b82f6;
+            --stop-red: #ff4d4d;
+            --gold: #ffb100;
+            --nova: #a855f7;
+        }
+        
+        body { 
+            background-color: var(--bg-dark);
+            background-image: radial-gradient(circle at 50% 50%, #1a2c38 0%, #050b14 80%);
+            color: #b1bad3;
+            font-family: 'Segoe UI', Arial, sans-serif; 
+            display: flex; align-items: center; justify-content: center; 
+            min-height: 100vh; margin: 0; user-select: none; 
+            padding: 20px; box-sizing: border-box;
+        }
+
+        .scanlines {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+            background-size: 100% 3px, 3px 100%; pointer-events: none; z-index: 9999; opacity: 0.6;
+        }
+
+        .game-container { 
+            display: flex; background: var(--sidebar-bg); border-radius: 16px; 
+            box-shadow: 0 0 80px rgba(0,0,0,0.8), 0 0 20px rgba(0, 229, 255, 0.1); 
+            width: 100%; max-width: 950px; min-height: 680px; 
+            position: relative; transition: 0.3s;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .game-container.mode-boost10 { border: 2px solid var(--booster-blue); box-shadow: 0 0 50px rgba(59, 130, 246, 0.4); }
+        .game-container.mode-boost75 { border: 2px solid var(--gold); box-shadow: 0 0 50px rgba(255, 177, 0, 0.4); }
+
+        .sidebar { 
+            width: 280px; background: var(--sidebar-bg); 
+            padding: 15px 20px 20px 20px; 
+            display: flex; flex-direction: column; gap: 12px; 
+            border-right: 1px solid rgba(255,255,255,0.05); 
+            position: relative; z-index: 100; flex-shrink: 0; 
+        }
+        
+        .tab-container { display: flex; background: #0b161f; border-radius: 50px; padding: 4px; }
+        .tab { flex: 1; padding: 12px; text-align: center; font-size: 13px; font-weight: bold; cursor: pointer; border-radius: 50px; color: #b1bad3; transition: 0.2s; }
+        .tab.active { background: #2f4553; color: white; box-shadow: 0 2px 10px rgba(0,0,0,0.2); }
+
+        .balance-section { background: rgba(0, 231, 1, 0.05); padding: 15px; border-radius: 6px; border-left: 4px solid var(--stake-green); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+        .balance-section label { font-size: 10px; color: #b1bad3; text-transform: uppercase; font-weight: bold; display: block; letter-spacing: 1px; }
+        .balance-section h3 { margin: 5px 0 0 0; font-size: 20px; font-variant-numeric: tabular-nums; text-shadow: 0 0 10px rgba(0,231,1,0.3); color: white; }
+
+        .total-bet-section { background: rgba(255, 77, 77, 0.1); padding: 12px; border-radius: 6px; border: 1px dashed var(--stop-red); display: none; }
+        .total-bet-section label { font-size: 9px; color: var(--stop-red); text-transform: uppercase; font-weight: 900; }
+        .total-bet-section h4 { margin: 2px 0 0 0; font-size: 18px; color: white; }
+
+        .input-group label { font-size: 11px; color: #b1bad3; font-weight: bold; margin-bottom: 6px; display: block; }
+        .custom-input-wrapper { display: flex; background: var(--input-bg); border: 2px solid #2f4553; border-radius: 4px; overflow: hidden; transition: 0.2s; }
+        .custom-input-wrapper:focus-within { border-color: var(--primary); box-shadow: 0 0 10px rgba(0, 229, 255, 0.2); }
+        .custom-input-wrapper input, .custom-input-wrapper select { background: var(--input-bg); border: none; color: white; padding: 12px; width: 100%; font-weight: bold; outline: none; font-size: 14px; }
+        .custom-input-wrapper select:disabled { opacity: 0.6; cursor: not-allowed; color: #777; }
+        
+        .adj-btn { background: #2f4553; border: none; color: #b1bad3; font-weight: bold; padding: 0 15px; cursor: pointer; transition: 0.2s; border-left: 1px solid var(--bg-dark); }
+        .adj-btn:hover { background: #3c5260; color: white; }
+
+        /* BUTTONS HIDDEN BY DEFAULT */
+        #betBtn, #stopAutoBtn, #cashBtn { display: none; padding: 20px; font-size: 16px; border-radius: 6px; border: none; cursor: pointer; font-weight: 800; width: 100%; transition: 0.1s; margin-top: 5px; letter-spacing: 0.5px; text-transform: uppercase; }
+        
+        #betBtn { background: var(--stake-green); color: #01080e; box-shadow: 0 0 20px rgba(0,231,1,0.2); }
+        #betBtn:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 0 30px rgba(0,231,1,0.4); }
+        #betBtn:disabled { background: #2f4553; color: #b1bad3; cursor: not-allowed; transform: none; box-shadow: none; }
+        
+        #stopAutoBtn { background: var(--stop-red); color: white; box-shadow: 0 0 20px rgba(255, 77, 77, 0.4); }
+        
+        #cashBtn { background: var(--win); color: white; box-shadow: 0 0 30px rgba(76, 175, 80, 0.5); border: 1px solid rgba(255,255,255,0.2); }
+        #cashBtn:disabled { background: #2f4553; color: #777; border-color: transparent; box-shadow: none; cursor: not-allowed; }
+
+        #boosterMenuBtn { flex-grow: 1; background: linear-gradient(135deg, #1a2c38 0%, #0f1921 100%); border: 1px solid var(--gold); color: var(--gold); padding: 15px; border-radius: 6px; font-weight: 900; cursor: pointer; transition: 0.3s; text-transform: uppercase; letter-spacing: 1px; animation: gold-pulse 2s infinite; display: flex; align-items: center; justify-content: center; gap: 10px; }
+        #boosterMenuBtn:hover { background: var(--gold); color: #000; box-shadow: 0 0 20px rgba(255, 177, 0, 0.6); }
+
+        #featuresBtn { width: 100%; background: #2f4553; border: 1px solid rgba(255,255,255,0.1); color: #b1bad3; padding: 12px; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 10px; transition: 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        #featuresBtn:hover { background: #3c5260; color: white; }
+
+        .main-content { 
+            flex-grow: 1; background: radial-gradient(circle at center, #132029 0%, #0b161f 100%); 
+            display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+            padding: 40px 30px 20px 30px; position: relative; 
+        }
+        
+        .game-logo { max-width: 230px; width: 100%; height: auto; display: block; margin: 0 auto 5px auto; animation: neon-pulse 3s infinite alternate cubic-bezier(0.455, 0.03, 0.515, 0.955); pointer-events: none; }
+
+        .settings-panel { position: absolute; bottom: 70px; right: -200px; background: #1a2c38; border: 1px solid #2f4553; border-radius: 8px; width: 200px; padding: 15px; display: none; z-index: 9999; box-shadow: 0 10px 30px rgba(0,0,0,0.8); }
+        .switch { position: relative; display: inline-block; width: 38px; height: 20px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #2f4553; transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 2px; bottom: 2px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: var(--stake-green); }
+        input:checked + .slider:before { transform: translateX(18px); }
+
+        #featuresSection { width: 100%; max-width: 550px; display: none; animation: float-up 0.3s ease-out; margin-top: 20px; }
+
+        .payout-container { width: 100%; max-width: 550px; background: rgba(0,0,0,0.2); border-radius: 12px; padding: 15px; margin-top: 20px; border: 1px solid rgba(255,255,255,0.05); }
+        .payout-header { font-size: 11px; color: #b1bad3; font-weight: bold; text-transform: uppercase; margin-bottom: 12px; text-align: center; letter-spacing: 1px; }
+        #payoutList { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 10px; justify-content: flex-start; scrollbar-width: thin; scrollbar-color: var(--primary) #1a2c38; }
+        #payoutList::-webkit-scrollbar { height: 6px; }
+        #payoutList::-webkit-scrollbar-track { background: #1a2c38; border-radius: 3px; }
+        #payoutList::-webkit-scrollbar-thumb { background-color: var(--primary); border-radius: 3px; }
+        
+        .payout-tile { min-width: 60px; background: #2f4553; border-radius: 6px; padding: 8px 4px; text-align: center; font-size: 12px; font-weight: 900; color: #b1bad3; transition: 0.3s; border-bottom: 3px solid rgba(0,0,0,0.3); opacity: 0.6; flex-shrink: 0; }
+        .payout-tile.active-step { background: var(--stake-green); color: #07141b; opacity: 1; transform: scale(1.1); box-shadow: 0 0 20px rgba(0, 231, 1, 0.4); border-bottom-color: #008f00; z-index: 10; border: 1px solid rgba(255,255,255,0.4); }
+        .payout-tile.passed { background: #3c5260; color: #fff; opacity: 0.4; }
+
+        .grid { display: grid; grid-template-columns: repeat(5, 70px); gap: 10px; position: relative; perspective: 1000px; margin-top: 10px; }
+        #mineGrid { min-height: 370px; }
+        .tile { width: 70px; height: 70px; background: var(--tile-bg); border-radius: 8px; border: none; cursor: pointer; border-bottom: 4px solid rgba(0,0,0,0.2); display: flex; align-items: center; justify-content: center; position: relative; transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275); font-size: 0; box-shadow: inset 0 1px 0 rgba(255,255,255,0.1); overflow: visible; }
+        .tile:hover:not(:disabled) { background: var(--tile-hover); transform: translateY(-3px); border-bottom-width: 6px; box-shadow: 0 0 15px rgba(0, 229, 255, 0.3); border-color: rgba(255,255,255,0.1); }
+        .tile:active:not(:disabled) { transform: translateY(2px); border-bottom-width: 2px; }
+        .tile svg { width: 52px; height: 52px; filter: drop-shadow(0 2px 5px rgba(0,0,0,0.5)); }
+
+        /* PERSISTENT SELECTION STYLE (AUTO MODE) */
+        .tile.tile-selected { 
+            border: 2px solid var(--primary); 
+            box-shadow: 0 0 20px rgba(0, 229, 255, 0.5), inset 0 0 10px rgba(0, 229, 255, 0.2); 
+            background: radial-gradient(circle, #3c5260 0%, #2f4553 100%); 
+        }
+
+        .multiplier-popup { position: absolute; top: -50px; left: 50%; transform: translateX(-50%); color: #fff; font-weight: 900; font-size: 24px; text-shadow: 0 2px 10px black; background: rgba(0,0,0,0.95); padding: 6px 12px; border-radius: 8px; z-index: 9999; pointer-events: none; white-space: nowrap; animation: float-up 1.5s ease-out forwards; border: 2px solid var(--primary); box-shadow: 0 0 20px var(--primary); }
+
+        .tile.revealed-safe { background: #07141b !important; border-bottom: 2px solid #2f4553; transform: none !important; cursor: default; box-shadow: 0 0 15px rgba(255, 215, 0, 0.4), inset 0 0 15px rgba(255, 215, 0, 0.1); border-color: rgba(255, 215, 0, 0.3); }
+        .tile.revealed-safe svg { animation: spin-reveal 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        
+        /* SPECIAL GEMS (Always Colorful) */
+        .tile.revealed-gold { background: radial-gradient(circle, #ffd700 0%, #b8860b 100%) !important; border-bottom: 2px solid #856404; box-shadow: 0 0 40px #ffd700; transform: scale(1.1) !important; z-index: 10; opacity: 1 !important; filter: none !important; }
+        .tile.revealed-gold svg { animation: spin-reveal 0.8s ease-out forwards; filter: drop-shadow(0 0 15px white); }
+        
+        .tile.revealed-nova { background: radial-gradient(circle, #d8b4fe 0%, #7e22ce 100%) !important; border-bottom: 2px solid #581c87; box-shadow: 0 0 40px #a855f7; transform: scale(1.1) !important; z-index: 10; opacity: 1 !important; filter: none !important; }
+        .tile.revealed-nova svg { animation: spin-reveal 2s infinite; filter: drop-shadow(0 0 15px #d8b4fe); }
+        
+        .tile.revealed-mine { background: #2a0e0e !important; border: 2px solid #ff4d4d; opacity: 1 !important; box-shadow: 0 0 40px rgba(255, 34, 34, 0.8), inset 0 0 10px rgba(255, 0, 0, 0.2); }
+        .tile.revealed-mine::after { content: ''; position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; border-radius: 50%; animation: nuke 0.6s ease-out forwards; pointer-events: none; z-index: 100; }
+        .tile.revealed-mine svg { filter: drop-shadow(0 0 15px #ff4d4d); position: relative; z-index: 20; }
+        
+        .tile.passive-missed { opacity: 0.3 !important; filter: grayscale(0.8); transform: scale(0.9); background: rgba(255,255,255,0.05) !important; border: 1px dashed rgba(255,255,255,0.2) !important; }
+        .tile.passive-missed svg { opacity: 0.5; }
+        
+        /* GHOST REVEAL OF SPECIALS */
+        .tile.ghost-special { opacity: 0.9 !important; filter: none !important; transform: scale(1.05); border: 2px dashed rgba(255,255,255,0.5) !important; }
+
+        .tile.faded { opacity: 0.2; transform: scale(0.9); }
+
+        .game-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(19, 32, 41, 0.98); backdrop-filter: blur(12px); border-radius: 15px; padding: 25px; text-align: center; z-index: 2000; display: none; width: 250px; border: 2px solid var(--stake-green); box-shadow: 0 0 60px rgba(0, 231, 1, 0.3); animation: reveal-pop 0.3s forwards; }
+        .compliance-footer { margin-top: 10px; font-size: 10px; color: #55657e; display: flex; gap: 15px; text-transform: uppercase; letter-spacing: 1px; justify-content: center; width: 100%; }
+
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); backdrop-filter: blur(8px); z-index: 6000; align-items: center; justify-content: center; flex-direction: column; }
+        .bonus-card { background: linear-gradient(145deg, rgba(20, 30, 40, 0.95), rgba(10, 15, 20, 0.98)); border-radius: 16px; width: 280px; overflow: hidden; display: flex; flex-direction: column; align-items: center; color: white; padding-bottom: 25px; transition: 0.3s; cursor: pointer; border: 1px solid rgba(255,255,255,0.05); position: relative; }
+        .bonus-card:hover { transform: translateY(-10px); }
+        .bonus-card.blue-card { border: 1px solid rgba(59, 130, 246, 0.3); box-shadow: 0 0 30px rgba(59, 130, 246, 0.1); }
+        .bonus-card.blue-card:hover { border-color: var(--booster-blue); box-shadow: 0 0 50px rgba(59, 130, 246, 0.4); }
+        .bonus-card.blue-card .header { background: linear-gradient(90deg, #1e3a8a, #3b82f6); }
+        .bonus-card.blue-card .price-tag { background: rgba(59, 130, 246, 0.2); border: 1px solid var(--booster-blue); color: #fff; }
+        .bonus-card.gold-card { border: 1px solid rgba(255, 177, 0, 0.3); box-shadow: 0 0 30px rgba(255, 177, 0, 0.1); }
+        .bonus-card.gold-card:hover { border-color: var(--gold); box-shadow: 0 0 50px rgba(255, 177, 0, 0.4); }
+        .bonus-card.gold-card .header { background: linear-gradient(90deg, #854d0e, #eab308); color: white; }
+        .bonus-card.gold-card .price-tag { background: rgba(255, 177, 0, 0.2); border: 1px solid var(--gold); color: #fff; }
+        .bonus-card .header { width: 100%; padding: 15px; text-align: center; font-weight: 900; font-size: 14px; letter-spacing: 1px; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+        .bonus-card .content { padding: 20px; text-align: center; display: flex; flex-direction: column; align-items: center; width: 100%; box-sizing: border-box; }
+        .bonus-card h2 { margin: 0; font-size: 20px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
+        .price-tag { padding: 8px 30px; border-radius: 50px; font-weight: 900; margin: 15px 0; font-size: 18px; }
+        .activate-btn { width: 90%; padding: 14px; border-radius: 8px; border: none; background: #2f4553; color: #b1bad3; font-weight: 900; cursor: pointer; text-transform: uppercase; transition: 0.2s; border: 1px solid rgba(255,255,255,0.1); }
+        .activate-btn:hover { background: var(--stake-green); color: black; box-shadow: 0 0 20px rgba(0, 231, 1, 0.4); }
+        .booster-header-adjuster { background: #1a2c38; border-radius: 12px; padding: 15px 25px; display: flex; align-items: center; justify-content: space-between; color: white; width: 220px; margin: 0 auto 25px auto; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); }
+        .booster-header-adjuster .label { position: absolute; top: -10px; left: 50%; transform: translateX(-50%); font-size: 10px; font-weight: 900; color: #000; text-transform: uppercase; background: var(--gold); padding: 2px 10px; border-radius: 4px; }
+        .booster-header-adjuster .val { font-size: 22px; font-weight: 800; margin-top: 0; color: white; }
+        .booster-header-adjuster .circle-btn { background: #2f4553; border: none; font-size: 20px; font-weight: bold; color: white; cursor: pointer; width: 35px; height: 35px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+        .booster-header-adjuster .circle-btn:hover { background: white; color: black; }
+        
+        .fairness-panel { width: 100%; background: transparent; border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 10px; font-size: 10px; color: #b1bad3; }
+        .hash-val { font-family: monospace; color: white; background: #0b161f; padding: 4px; border-radius: 4px; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid #2f4553; margin-top: 2px; }
+        .seed-input { background: #0b161f; border: 1px solid #2f4553; color: white; padding: 4px; width: 100px; border-radius: 4px; text-align: center; }
+        #boosterBadge { display: none; padding: 8px 12px; border-radius: 6px; font-size: 11px; font-weight: 900; text-transform: uppercase; margin-bottom: 15px; text-align: center; letter-spacing: 1px; animation: reveal-pop 0.3s; }
+        
+        .compliance-odds { font-size: 10px; color: #b1bad3; opacity: 0.7; margin: 10px 0; text-align: left; width: 100%; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px; }
+        .compliance-odds span { display: block; margin-bottom: 2px; }
+    </style>
+</head>
+<body>
+
+    <div class="scanlines"></div>
+
+    <div class="game-container" id="gameContainer">
+        <div class="sidebar">
+            <img src="mylogo.png" alt="Xtreme Mines Logo" class="game-logo">
+
+            <div id="boosterBadge"></div>
+            <div class="tab-container">
+                <div id="tabManual" class="tab active" onclick="switchTab('manual')">Manual</div>
+                <div id="tabAuto" class="tab" onclick="switchTab('auto')">Auto</div>
+            </div>
+            
+            <div class="balance-section"><label>VAULT BALANCE</label><h3 id="balDisplay">$5,000.00</h3></div>
+            
+            <div id="totalBetBox" class="total-bet-section">
+                <label>TOTAL ROUND COST</label>
+                <h4 id="totalBetAmount">$0.00</h4>
+            </div>
+
+            <div class="input-group">
+                <label>Bet Amount</label>
+                <div class="custom-input-wrapper">
+                    <input type="number" id="betInput" value="10.00" step="1" oninput="Client.updatePayoutList(); updateBoosterDisplay(); Client.sfx('ui');">
+                    <button class="adj-btn" onclick="adjustBet('1/2')">½</button>
+                    <button class="adj-btn" onclick="adjustBet('2x')">2×</button>
+                </div>
+            </div>
+
+            <div class="input-group">
+                <label>Mines</label>
+                <div class="custom-input-wrapper">
+                    <select id="mineSelect" onchange="Client.updatePayoutList(); Client.sfx('ui');">
+                        <option value="1">1 Mine</option>
+                        <option value="3" selected>3 Mines</option>
+                        <option value="5">5 Mines</option>
+                        <option value="10">10 Mines</option>
+                        <option value="20">20 Mines</option>
+                        <option value="24">24 Mines</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="autoInputs" style="display:none; flex-direction: column; gap:12px;">
+                <div class="input-group"><label>Number of Bets</label><div class="custom-input-wrapper"><input type="number" id="numBets" value="10"></div></div>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+                    <div class="input-group"><label>Stop Profit</label><div class="custom-input-wrapper"><input type="number" id="stopProfit" placeholder="100.00"></div></div>
+                    <div class="input-group"><label>Stop Loss</label><div class="custom-input-wrapper"><input type="number" id="stopLoss" placeholder="50.00"></div></div>
+                </div>
+            </div>
+            
+            <button id="betBtn" onclick="play()">PLACE BET</button>
+            <button id="stopAutoBtn" onclick="stopAuto()">STOP AUTO</button>
+            <button id="cashBtn" onclick="cashOut()" disabled>CASH OUT</button>
+            
+            <button id="featuresBtn" onclick="toggleFeatures()">🛡️ Fair Play & Stats</button>
+
+            <div style="display: flex; align-items: center; gap: 10px; margin-top: 5px;">
+                <button id="boosterMenuBtn" onclick="openBonus()"><span>💎</span> Booster Menu</button>
+                <div style="position:relative;">
+                    <div style="cursor:pointer; font-size:22px; padding: 10px; background:#2f4553; border-radius:6px;" onclick="toggleSettings(event); Client.sfx('ui');">⚙️</div>
+                    <div class="settings-panel" id="settingsPanel">
+                        <div style="font-weight:bold; margin-bottom:15px; font-size: 14px; border-bottom:1px solid #2f4553; padding-bottom:8px;">Game Settings</div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; font-size:13px;"><span>Sound FX</span><label class="switch"><input type="checkbox" id="volToggle" checked><span class="slider"></span></label></div>
+                        <div id="turboSetting" style="display:flex; justify-content:space-between; align-items:center; font-size:13px;"><span>Instant Bet</span><label class="switch"><input type="checkbox" id="instantToggle"><span class="slider"></span></label></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div style="margin-top:15px; background:#07141b; padding:18px; border-radius:6px; border: 1px solid rgba(255,255,255,0.05);"><label style="font-size:10px; opacity:0.6;">CURRENT WIN</label><h4 id="profitDisplay" style="color:var(--stake-green); margin:5px 0 0 0; font-size: 18px;">$0.00</h4></div>
+        </div>
+
+        <div class="main-content">
+            <div class="grid" id="mineGrid"></div>
+            
+            <div class="payout-container"><div class="payout-header">Probability Multiplier</div><div id="payoutList"></div></div>
+
+            <div id="featuresSection">
+                <div class="fairness-panel">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><strong>PROVABLY FAIR</strong><span style="color:var(--stake-green);">Active</span></div>
+                    <div style="margin-bottom:8px;"><div>SERVER SEED (HASHED)</div><div class="hash-val" id="serverHashDisplay">PENDING...</div></div>
+                    <div style="display:flex; gap:10px;">
+                        <div style="flex-grow:1;"><div>CLIENT SEED</div><input type="text" class="seed-input" value="ClientSeed_123" id="clientSeed" style="width:100%; text-align:left;"></div>
+                        <div><div>NONCE</div><div class="seed-input" id="nonceDisplay">0</div></div>
+                    </div>
+                </div>
+                
+                <div class="compliance-footer">
+                    <span>18+</span>
+                    <span>RTP 96.4%</span>
+                    <span>PLAY SAFE</span>
+                </div>
+            </div>
+
+            <div id="winPopup" class="game-overlay">
+                <h2 style="color:var(--stake-green); margin: 0; font-size: 28px; text-shadow: 0 0 10px rgba(0,231,1,0.5);">CASHOUT!</h2>
+                <div id="winMulti" style="color:var(--stake-green); font-size: 32px; font-weight: 900; margin: 8px 0;">1.00x</div>
+                <div id="winAmount" style="font-size:18px; font-weight:800; color: white;">$0.00</div>
+            </div>
+            <div id="bombPopup" class="game-overlay" style="border-color: #ff4d4d; width: 180px; box-shadow: 0 0 50px rgba(255, 77, 77, 0.4);">
+                <h2 style="color:#ff4d4d; margin: 0; font-size: 24px; text-shadow: 0 0 10px rgba(255, 77, 77, 0.5);">BUSTED!</h2>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="bonusOverlay" onclick="this.style.display='none'">
+        <div class="bonus-content-wrapper" onclick="event.stopPropagation()" style="display:flex; flex-direction:column; align-items:center;">
+            <div class="booster-header-adjuster">
+                <div class="label">BASE BET</div>
+                <button class="circle-btn" onclick="adjustBet('1/2')">−</button>
+                <div class="val" id="boosterBetDisplay">$10.00</div>
+                <button class="circle-btn" onclick="adjustBet('2x')">+</button>
+            </div>
+            <div style="display:flex; gap:25px;">
+                <div class="bonus-card blue-card" onclick="setMode('boost10')">
+                    <div class="header">ELITE BOOSTER</div>
+                    <div class="content">
+                        <h2>GEM BOOST</h2>
+                        <div style="margin: 20px 0;">
+                             <svg width="80" height="80" viewBox="0 0 64 64" fill="none">
+                                <defs>
+                                    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#00ffff"/><stop offset="100%" style="stop-color:#0077ff"/></linearGradient>
+                                    <linearGradient id="g2" x1="100%" y1="0%" x2="0%" y2="100%"><stop offset="0%" style="stop-color:#00ccff"/><stop offset="100%" style="stop-color:#0055dd"/></linearGradient>
+                                </defs>
+                                <path d="M16 16 L48 16 L56 26 L8 26 Z" fill="url(#g1)" stroke="#fff" stroke-width="0.5" />
+                                <path d="M8 26 L56 26 L32 58 Z" fill="url(#g2)" stroke="#fff" stroke-width="0.5" />
+                                <path d="M16 16 L8 26 L32 58 L32 26 Z" fill="white" opacity="0.2" />
+                            </svg>
+                        </div>
+                        <p style="font-size:13px; color:#b1bad3; margin:0;">Adds 3 Hidden Gold Gems<br>Multiplier: 1.5x - 10x</p>
+                        <div class="compliance-odds">
+                            <span>1.5x (60%)</span><span>3.0x (30%)</span><span>5.0x (9%)</span><span>10.0x (1%)</span>
+                        </div>
+                        <div class="price-tag" id="priceBoost10">$100.00</div>
+                        <button class="activate-btn">Activate</button>
+                    </div>
+                </div>
+                <div class="bonus-card gold-card" onclick="setMode('boost75')">
+                    <div class="header">LEGENDARY BOOSTER</div>
+                    <div class="content">
+                        <h2>SUPER NOVA</h2>
+                        <div style="margin: 20px 0;">
+                            <svg width="80" height="80" viewBox="0 0 64 64" fill="none">
+                                <defs>
+                                    <radialGradient id="gradGold" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
+                                        <stop offset="0%" style="stop-color:#fff7e6" />
+                                        <stop offset="100%" style="stop-color:#ffaa00" />
+                                    </radialGradient>
+                                </defs>
+                                <path d="M32 2 L41 22 L62 22 L45 36 L52 58 L32 46 L12 58 L19 36 L2 22 L23 22 Z" fill="url(#gradGold)" stroke="#ffd700" stroke-width="1"/>
+                                <circle cx="32" cy="30" r="15" fill="white" opacity="0.3" filter="blur(5px)" />
+                            </svg>
+                        </div>
+                        <p style="font-size:13px; color:#b1bad3; margin:0;">Adds 3 Nova Stars<br>Multiplier: 3x - 50x</p>
+                        <div class="compliance-odds">
+                            <span>3.0x (50%)</span><span>10.0x (30%)</span><span>25.0x (15%)</span><span>50.0x (5%)</span>
+                        </div>
+                        <div class="price-tag" id="priceBoost75">$750.00</div>
+                        <button class="activate-btn">Activate</button>
+                    </div>
+                </div>
+            </div>
+            <button onclick="setMode('normal')" style="margin-top:30px; background:transparent; border:1px solid #ff4d4d; color:#ff4d4d; padding:12px 40px; border-radius:50px; font-weight:bold; cursor:pointer; text-transform:uppercase; font-size:12px; transition:0.2s;">Disable Boosters</button>
+        </div>
+    </div>
+
+<script>
+/* =========================
+   CONFIG & HELPERS
+========================= */
+// If opening as a file, use localhost. Otherwise, use relative path (works for Phone & Web)
+const API_URL = window.location.protocol === "file:" 
+    ? "http://localhost:3000" 
+    : "";
+const MICROS = 1000000;
+
+function toMicros(val) { return Math.floor(val * MICROS); }
+function fromMicros(val) { return val / MICROS; }
+
+function safeNum(val) {
+    if (typeof val === 'number') return val;
+    if (typeof val === 'string') return parseFloat(val) || 0;
+    return 0;
+}
+
+const ClientHelper = {
+    getSpeed: () => {
+        const toggle = document.getElementById("instantToggle");
+        return (toggle && toggle.checked) ? 1.5 : 1.0;
+    },
+    wait: (ms) => new Promise(r => setTimeout(r, ms / ClientHelper.getSpeed()))
+};
+
+/* =========================
+   API HELPERS
+========================= */
+async function apiPost(path, body = {}) {
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) {
+      const json = await res.json();
+      throw new Error(json.message || "Server Error");
+    }
+    return res.json();
+  } catch (err) {
+    throw err;
+  }
+}
+
+async function apiBet({ bet, mines, mode, clientSeed }) {
+  // CONVERT TO MICROS FOR RGS COMPLIANCE
+  return apiPost("/api/bet", { amount: toMicros(bet), mines, mode, clientSeed });
+}
+
+async function apiReveal({ index }) {
+  return apiPost("/api/reveal", { index });
+}
+
+async function apiCashout() {
+  return apiPost("/api/cashout", {});
+}
+
+/* =========================
+   CLIENT LOGIC
+========================= */
+const Client = {
+  mode: "normal",
+  isAutoTab: false,
+  autoActive: false,
+  autoConfig: null,
+  audioCtx: null,
+  selectedTiles: [],
+  balance: 0, // <--- CHANGED FROM 5000.0 TO 0
+  gameActive: false,
+  
+  // STORE LOCAL VARIABLES
+  currentMultipliers: [],
+  activeBetAmount: 0,
+  currentWinAmount: 0, 
+
+  init: async () => {
+    Client.renderGrid();
+    Client.updatePayoutList();
+
+    // Default balance until fetch
+    const balEl = document.getElementById("balDisplay");
+    // <--- CHANGED: Show a loading dash instead of fake money
+    if (balEl) balEl.innerText = "Loading..."; 
+    
+    try {
+        const res = await fetch(`${API_URL}/api/init`);
+        if(res.ok) {
+            const data = await res.json();
+            
+            // JURISDICTION COMPLIANCE CHECK
+            if(data.jurisdiction && data.jurisdiction.disabledTurbo) {
+                document.getElementById("turboSetting").style.display = "none";
+                document.getElementById("instantToggle").checked = false;
+            }
+
+            // SET BALANCE (CONVERT FROM MICROS)
+            if(data.balance !== undefined) Client.balance = fromMicros(data.balance);
+            if(balEl) balEl.innerText = "$" + safeNum(Client.balance).toFixed(2);
+            
+            const betBtn = document.getElementById("betBtn");
+            const cashBtn = document.getElementById("cashBtn");
+
+            // RESTORE ACTIVE GAME
+            if(data.activeGame) {
+                Client.gameActive = true;
+                Client.activeBetAmount = fromMicros(data.activeGame.bet);
+                Client.currentWinAmount = fromMicros(data.activeGame.currentWin);
+                
+                const profitEl = document.getElementById("profitDisplay");
+                if (profitEl) profitEl.innerText = "$" + Client.currentWinAmount.toFixed(2);
+
+                if(data.activeGame.revealed && data.activeGame.revealed.length > 0) {
+                    let hasReveals = false;
+                    data.activeGame.revealed.forEach(idx => {
+                        const tile = document.querySelectorAll('.tile')[idx];
+                        if(tile) {
+                            hasReveals = true;
+                            tile.setAttribute('data-revealed', 'true');
+                            
+                            // 🚨 CRITICAL FIX: REPAINT SPECIAL GEMS
+                            const specialData = data.activeGame.specialMap ? data.activeGame.specialMap[idx] : null;
+                            if (specialData) {
+                                if (specialData.type === "GOLD_GEM") {
+                                    tile.classList.add('revealed-gold');
+                                    tile.innerHTML = Client.SVG.GOLD;
+                                } else if (specialData.type === "NOVA_STAR") {
+                                    tile.classList.add('revealed-nova');
+                                    tile.innerHTML = Client.SVG.NOVA;
+                                }
+                            } else {
+                                // Standard Safe Tile
+                                tile.classList.add('revealed-safe');
+                                tile.innerHTML = Client.getSafeSvg();
+                            }
+                        }
+                    });
+                    
+                    if (cashBtn) {
+                        cashBtn.style.display = "block";
+                        cashBtn.disabled = !hasReveals;
+                    }
+                } else {
+                    // Active Game but NO reveals (0 tiles clicked)
+                    if (cashBtn) {
+                        cashBtn.style.display = "block";
+                        cashBtn.disabled = true;
+                    }
+                }
+                
+                if(betBtn) betBtn.style.display = "none";
+
+            } else {
+                // NO ACTIVE GAME
+                if(betBtn) betBtn.style.display = "block";
+                if(cashBtn) cashBtn.style.display = "none";
+            }
+        }
+    } catch(e) {
+        console.log("Backend offline or connection error");
+        document.getElementById("betBtn").style.display = "block";
+    }
+  },
+
+  initAudio: () => {
+    if (!Client.audioCtx) Client.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    else if (Client.audioCtx.state === "suspended") Client.audioCtx.resume();
+  },
+
+  sfx: (type) => {
+    const volToggle = document.getElementById("volToggle");
+    if (!volToggle || !volToggle.checked || !Client.audioCtx) return;
+
+    const ctx = Client.audioCtx;
+    const t = ctx.currentTime;
+    const osc = (f, ty, d, v) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = ty;
+      o.frequency.setValueAtTime(f, t);
+      g.gain.setValueAtTime(v, t);
+      g.gain.exponentialRampToValueAtTime(0.01, t + d);
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.start(t);
+      o.stop(t + d);
+    };
+    const noise = (d) => {
+      const b = ctx.createBuffer(1, ctx.sampleRate * d, ctx.sampleRate);
+      const da = b.getChannelData(0);
+      for (let i = 0; i < b.length; i++) da[i] = Math.random() * 2 - 1;
+      const s = ctx.createBufferSource();
+      s.buffer = b;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.5, t);
+      g.gain.exponentialRampToValueAtTime(0.01, t + d);
+      const f = ctx.createBiquadFilter();
+      f.type = "lowpass";
+      f.frequency.value = 1000;
+      f.frequency.linearRampToValueAtTime(100, t + d);
+      s.connect(f);
+      f.connect(g);
+      g.connect(ctx.destination);
+      s.start(t);
+    };
+
+    if (type === "gem") { osc(1200, "triangle", 0.1, 0.1); setTimeout(() => osc(2000, "sine", 0.3, 0.05), 50); }
+    else if (type === "gold") { [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) => setTimeout(() => osc(freq, "triangle", 0.3, 0.2), i * 80)); }
+    else if (type === "nova") { noise(0.8); osc(100, "sawtooth", 1.0, 0.3); setTimeout(() => osc(800, "square", 0.5, 0.1), 100); setTimeout(() => osc(1200, "square", 0.5, 0.1), 200); setTimeout(() => osc(2000, "square", 0.8, 0.1), 300); }
+    else if (type === "bomb") { noise(0.6); osc(100, "sawtooth", 0.6, 0.2); }
+    else if (type === "cash") { osc(523, "triangle", 0.3, 0.1); setTimeout(() => osc(659, "triangle", 0.3, 0.1), 100); setTimeout(() => osc(783, "triangle", 0.6, 0.1), 200); }
+    else if (type === "ui") { osc(800, "sine", 0.05, 0.05); }
+    else if (type === "coin") { osc(1600, "sine", 0.1, 0.05); setTimeout(() => osc(2000, "sine", 0.1, 0.05), 50); }
+  },
+
+  updateHash: (hash) => {
+    const el = document.getElementById("serverHashDisplay");
+    if (el) el.innerText = hash || "—";
+  },
+
+  updatePayoutList: () => {
+    const mines = parseInt(document.getElementById("mineSelect")?.value || "3", 10);
+    const bet = parseFloat(document.getElementById("betInput")?.value || "10");
+    const boost = Client.mode === "boost10" ? 10 : (Client.mode === "boost75" ? 75 : 1);
+
+    const list = document.getElementById("payoutList");
+    if (!list) return;
+    list.innerHTML = "";
+    
+    // Reset multipliers array
+    Client.currentMultipliers = [];
+
+    let current = 1;
+    const houseEdge = 0.964;
+    const maxSafe = 25 - mines;
+
+    for (let i = 0; i < maxSafe; i++) {
+      const totalRem = 25 - i;
+      const safeRem = (25 - mines) - i;
+      const prob = safeRem / totalRem;
+      current = current / prob;
+      const val = current * houseEdge;
+      
+      Client.currentMultipliers.push(val);
+
+      const el = document.createElement("div");
+      el.className = "payout-tile";
+      el.id = `step-${i}`;
+      const payout = (bet * boost) * val;
+      const effectiveMulti = payout / bet;
+
+      el.innerHTML =
+        `<div>${Math.floor(effectiveMulti * 100) / 100}×</div>` +
+        `<div style="font-size:10px; color:white; opacity:0.8">${Client.fmt(payout)}</div>`;
+      list.appendChild(el);
+    }
+  },
+
+  toggleFeatures: () => {
+    const sec = document.getElementById("featuresSection");
+    if (!sec) return;
+    sec.style.display = sec.style.display === "block" ? "none" : "block";
+    Client.sfx("ui");
+  },
+
+  play: async () => {
+    Client.initAudio();
+    Client.sfx("ui");
+
+    if (Client.isAutoTab) {
+      Client.startAuto();
+      return;
+    }
+
+    const betInput = parseFloat(document.getElementById("betInput")?.value || "10");
+    
+    if (betInput > Client.balance) {
+        alert("Insufficient Funds");
+        return;
+    }
+
+    const minesInput = parseInt(document.getElementById("mineSelect")?.value || "3", 10);
+    const clientSeed = document.getElementById("clientSeed")?.value || "ClientSeed_123";
+    const betBtn = document.getElementById("betBtn");
+    
+    if (betBtn) {
+        betBtn.disabled = true;
+        betBtn.innerText = "LOADING...";
+    }
+
+    try {
+      // ⚡ Clear grid ONLY on new bet
+      Client.renderGrid();
+
+      const response = await apiBet({
+        bet: betInput,
+        mines: minesInput,
+        mode: Client.mode,
+        clientSeed
+      });
+
+      // Save local state
+      let multiplier = 1;
+      if(Client.mode === 'boost10') multiplier = 10;
+      if(Client.mode === 'boost75') multiplier = 75;
+      Client.activeBetAmount = betInput * multiplier;
+      Client.currentWinAmount = 0;
+
+      // Handle Balance (Convert from Micros)
+      if (typeof response.balance === "number") {
+        Client.balance = fromMicros(response.balance);
+        const balEl = document.getElementById("balDisplay");
+        if (balEl) balEl.innerText = "$" + Client.balance.toFixed(2);
+      }
+
+      if (response.nextHash) Client.updateHash(response.nextHash);
+      if (response.nonce != null) {
+        const nonceEl = document.getElementById("nonceDisplay");
+        if (nonceEl) nonceEl.innerText = String(response.nonce);
+      }
+
+      Client.gameActive = true;
+      if (betBtn) betBtn.style.display = "none";
+      const cashBtn = document.getElementById("cashBtn");
+      if (cashBtn) {
+          cashBtn.style.display = "block";
+          cashBtn.disabled = true; 
+      }
+
+      Client.updatePayoutList();
+      Client.highlightStep(-1);
+
+      const profitEl = document.getElementById("profitDisplay");
+      if (profitEl) profitEl.innerText = "$0.00";
+
+      document.querySelectorAll(".tile").forEach(t => t.disabled = false);
+      Client.sfx("coin");
+
+    } catch (e) {
+      alert("Bet failed: " + e.message);
+      if(betBtn) {
+          betBtn.disabled = false;
+          betBtn.innerText = "PLACE BET";
+      }
+    }
+  },
+
+  startAuto: async () => {
+    Client.sfx("ui");
+    const numBets = parseInt(document.getElementById("numBets")?.value || "0", 10);
+    if (numBets <= 0) return alert("Please enter number of bets.");
+    if (Client.selectedTiles.length === 0) return alert("Please select a pattern on the grid.");
+    
+    const betInput = parseFloat(document.getElementById("betInput")?.value || "10");
+    if (betInput > Client.balance) {
+        alert("Insufficient Funds");
+        return;
+    }
+
+    Client.autoActive = true;
+    Client.autoConfig = {
+      remaining: numBets,
+      startBal: Client.balance,
+      stopWin: parseFloat(document.getElementById("stopProfit")?.value || "0") || 0,
+      stopLoss: parseFloat(document.getElementById("stopLoss")?.value || "0") || 0
+    };
+
+    const betBtn = document.getElementById("betBtn");
+    const stopBtn = document.getElementById("stopAutoBtn");
+    if (betBtn) betBtn.style.display = "none";
+    if (stopBtn) stopBtn.style.display = "block";
+
+    Client.runAutoLoop();
+  },
+
+  runAutoLoop: async () => {
+    if (!Client.autoActive) return;
+    if (Client.autoConfig.remaining <= 0) { Client.stopAutoInternal(); return; }
+
+    const profit = Client.balance - Client.autoConfig.startBal;
+    if (Client.autoConfig.stopWin > 0 && profit >= Client.autoConfig.stopWin) { Client.stopAutoInternal(); return; }
+    if (Client.autoConfig.stopLoss > 0 && profit <= -Client.autoConfig.stopLoss) { Client.stopAutoInternal(); return; }
+
+    const betInput = parseFloat(document.getElementById("betInput")?.value || "10");
+    const minesInput = parseInt(document.getElementById("mineSelect")?.value || "3", 10);
+    const clientSeed = document.getElementById("clientSeed")?.value || "ClientSeed_123";
+
+    try {
+      const response = await apiBet({
+        bet: betInput,
+        mines: minesInput,
+        mode: Client.mode,
+        clientSeed
+      });
+
+      let multiplier = 1;
+      if(Client.mode === 'boost10') multiplier = 10;
+      if(Client.mode === 'boost75') multiplier = 75;
+      Client.activeBetAmount = betInput * multiplier;
+      Client.currentWinAmount = 0; 
+
+      if (typeof response.balance === "number") {
+        Client.balance = fromMicros(response.balance);
+        const balEl = document.getElementById("balDisplay");
+        if (balEl) balEl.innerText = "$" + Client.balance.toFixed(2);
+      }
+
+      if (response.nextHash) Client.updateHash(response.nextHash);
+      if (response.nonce != null) {
+        const nonceEl = document.getElementById("nonceDisplay");
+        if (nonceEl) nonceEl.innerText = String(response.nonce);
+      }
+
+      Client.gameActive = true;
+      Client.autoConfig.remaining--;
+      const nb = document.getElementById("numBets");
+      if (nb) nb.value = Client.autoConfig.remaining;
+
+      // START ROUND VISUALS
+      Client.renderGrid(); 
+      Client.sfx("coin");
+      Client.updatePayoutList();
+      Client.highlightStep(-1);
+      
+      const profitEl = document.getElementById("profitDisplay");
+      if (profitEl) profitEl.innerText = "$0.00";
+
+      await ClientHelper.wait(300);
+
+      let bust = false;
+      let revealsInThisLoop = 0; 
+
+      for (const tileIdx of Client.selectedTiles) {
+        if (bust) break;
+
+        const tileEl = document.querySelectorAll(".tile")[tileIdx];
+        tileEl.style.transform = "scale(0.9)";
+
+        const result = await apiReveal({ index: tileIdx });
+
+        if (result.status === "BOMB") {
+          Client.sfx("bomb");
+          tileEl.classList.add("revealed-mine");
+          tileEl.innerHTML = Client.SVG.BOMB;
+          bust = true;
+          if (Array.isArray(result.mineMap)) {
+            Client.ghostReveal(result.mineMap, result.specialMap || null);
+          }
+        } else {
+          // SAFE
+          revealsInThisLoop++;
+          if (result.special?.type === "GOLD_GEM") {
+            Client.sfx("gold");
+            tileEl.innerHTML = Client.SVG.GOLD;
+            tileEl.classList.add("revealed-gold");
+            Client.spawnMultiplierPopup(tileEl, result.special.mult);
+          } else if (result.special?.type === "NOVA_STAR") {
+            Client.sfx("nova");
+            tileEl.innerHTML = Client.SVG.NOVA;
+            tileEl.classList.add("revealed-nova");
+            Client.spawnMultiplierPopup(tileEl, result.special.mult);
+          } else {
+            Client.sfx("gem");
+            tileEl.classList.add("revealed-safe");
+            tileEl.innerHTML = Client.getSafeSvg();
+          }
+
+          // UPDATE MATH
+          const rawPayout = fromMicros(result.payout);
+          if (profitEl) profitEl.innerText = "$" + rawPayout.toFixed(2);
+          
+          Client.highlightStep(revealsInThisLoop - 1);
+        }
+        await ClientHelper.wait(200);
+      }
+
+      if (!bust) {
+        const res = await apiCashout();
+        if (typeof res.balance === "number") {
+          Client.balance = fromMicros(res.balance);
+          document.getElementById("balDisplay").innerText = "$" + Client.balance.toFixed(2);
+        }
+        Client.sfx("cash");
+        Client.ghostReveal(res.mineMap || [], res.specialMap || null);
+        
+        // POPUP
+        const finalWin = fromMicros(res.winAmount);
+        const winPopup = document.getElementById("winPopup");
+        const winMulti = document.getElementById("winMulti");
+        const winAmount = document.getElementById("winAmount");
+        if (winMulti) winMulti.innerText = safeNum(res.finalMultiplier ?? 1).toFixed(2) + "x";
+        if (winAmount) winAmount.innerText = "$" + finalWin.toFixed(2);
+        if (winPopup) {
+            winPopup.style.display = "block";
+            setTimeout(() => winPopup.style.display = "none", 1000 / ClientHelper.getSpeed());
+        }
+
+        setTimeout(() => {
+            if (Client.autoActive) {
+                Client.renderGrid();
+                Client.runAutoLoop();
+            } else if (Client.isAutoTab) {
+                // FIXED: If auto stopped, restore pattern selection
+                Client.renderGrid();
+            }
+        }, 1200 / ClientHelper.getSpeed());
+      } else {
+        setTimeout(() => {
+            Client.gameActive = false;
+            if (Client.autoActive) {
+                Client.renderGrid();
+                Client.runAutoLoop();
+            } else if (Client.isAutoTab) {
+                // FIXED: If auto stopped, restore pattern selection
+                Client.renderGrid();
+            }
+        }, 1200 / ClientHelper.getSpeed());
+      }
+
+    } catch (e) {
+      console.error(e);
+      alert("Auto failed: " + e.message);
+      Client.stopAutoInternal();
+    }
+  },
+
+  stopAutoInternal: () => {
+    Client.sfx("ui");
+    Client.autoActive = false;
+    const betBtn = document.getElementById("betBtn");
+    const stopBtn = document.getElementById("stopAutoBtn");
+    if (betBtn) betBtn.style.display = "block";
+    if (stopBtn) stopBtn.style.display = "none";
+    if (betBtn) {
+      betBtn.disabled = false;
+      betBtn.innerText = "PLACE BET";
+    }
+  },
+
+  handleTileClick: async (index) => {
+    if (Client.isAutoTab && !Client.autoActive) {
+      const btn = document.querySelectorAll(".tile")[index];
+      const maxSafe = 25 - parseInt(document.getElementById("mineSelect")?.value || "3", 10);
+      
+      if (Client.selectedTiles.includes(index)) {
+        Client.selectedTiles = Client.selectedTiles.filter(i => i !== index);
+        btn.classList.remove("tile-selected");
+      } else {
+        if (Client.selectedTiles.length < maxSafe) {
+          Client.selectedTiles.push(index);
+          btn.classList.add("tile-selected");
+          Client.sfx("ui");
+        }
+      }
+      return;
+    }
+
+    if (Client.autoActive || !Client.gameActive) return;
+
+    const tile = document.querySelectorAll(".tile")[index];
+    if (tile.getAttribute("data-revealed") === "true") return;
+
+    tile.setAttribute("data-revealed", "true");
+    tile.style.transform = "scale(0.9)";
+
+    try {
+      const result = await apiReveal({ index });
+
+      if (result.status === "BOMB") {
+        Client.sfx("bomb");
+        tile.classList.add("revealed-mine");
+        tile.innerHTML = Client.SVG.BOMB;
+        Client.endGame(result.mineMap || [], false, result.specialMap || null);
+      } else {
+        const cashBtn = document.getElementById("cashBtn");
+        if(cashBtn) cashBtn.disabled = false;
+
+        if (result.special?.type === "GOLD_GEM") {
+          Client.sfx("gold");
+          tile.innerHTML = Client.SVG.GOLD;
+          tile.classList.add("revealed-gold");
+          Client.spawnMultiplierPopup(tile, result.special.mult);
+        } else if (result.special?.type === "NOVA_STAR") {
+          Client.sfx("nova");
+          tile.innerHTML = Client.SVG.NOVA;
+          tile.classList.add("revealed-nova");
+          Client.spawnMultiplierPopup(tile, result.special.mult);
+        } else {
+          Client.sfx("gem");
+          tile.classList.add("revealed-safe");
+          tile.innerHTML = Client.getSafeSvg();
+        }
+
+        const payoutFloat = fromMicros(result.payout);
+        const profitEl = document.getElementById("profitDisplay");
+        if (profitEl) profitEl.innerText = "$" + payoutFloat.toFixed(2);
+        
+        // Calc steps based on reveals
+        const reveals = document.querySelectorAll('.tile[data-revealed="true"]').length;
+        Client.highlightStep(reveals - 1);
+      }
+    } catch (e) {
+      alert("Reveal failed: " + e.message);
+    }
+  },
+
+  cashOut: async () => {
+    if (Client.autoActive) return;
+    try {
+      const res = await apiCashout();
+
+      if (res.success) {
+        Client.sfx("cash");
+        
+        if (res.balance !== undefined) {
+             Client.balance = fromMicros(res.balance); 
+             const balEl = document.getElementById("balDisplay");
+             if (balEl) balEl.innerText = "$" + Client.balance.toFixed(2);
+        }
+        
+        const finalWin = fromMicros(res.winAmount);
+        const profitEl = document.getElementById("profitDisplay");
+        if (profitEl) profitEl.innerText = "$" + finalWin.toFixed(2);
+
+        const winMulti = document.getElementById("winMulti");
+        const winAmount = document.getElementById("winAmount");
+        if (winMulti) winMulti.innerText = safeNum(res.finalMultiplier ?? 1).toFixed(2) + "x";
+        if (winAmount) winAmount.innerText = "$" + finalWin.toFixed(2);
+
+        const winPopup = document.getElementById("winPopup");
+        if (winPopup) winPopup.style.display = "block";
+
+        Client.endGame(res.mineMap || [], true, res.specialMap || null);
+      }
+    } catch (e) {
+      alert("Cashout failed: " + e.message);
+    }
+  },
+
+  endGame: (mineMap, isWin, specialMap) => {
+    Client.gameActive = false;
+    document.querySelectorAll(".tile").forEach(t => t.disabled = true);
+    Client.ghostReveal(mineMap, specialMap);
+
+    if (!isWin) {
+      const bombPopup = document.getElementById("bombPopup");
+      if (bombPopup) {
+        bombPopup.style.display = "block";
+        setTimeout(() => bombPopup.style.display = "none", 2000 / ClientHelper.getSpeed());
+      }
+    } else {
+      const winPopup = document.getElementById("winPopup");
+      if (!Client.autoActive) {
+          if (winPopup) setTimeout(() => winPopup.style.display = "none", 2500 / ClientHelper.getSpeed());
+      }
+    }
+
+    setTimeout(() => {
+        if (Client.autoActive) {
+            // Auto handles reset
+        } else {
+            const betBtn = document.getElementById("betBtn");
+            const stopBtn = document.getElementById("stopAutoBtn");
+            const cashBtn = document.getElementById("cashBtn");
+            
+            if (betBtn) {
+                betBtn.style.display = "block";
+                betBtn.disabled = false;
+                betBtn.innerText = "PLACE BET";
+            }
+            if (stopBtn) stopBtn.style.display = "none";
+            if (cashBtn) cashBtn.style.display = "none";
+        }
+    }, 1000 / ClientHelper.getSpeed());
+  },
+
+  ghostReveal: (mineMap, specialMap) => {
+    const allTiles = document.querySelectorAll(".tile");
+    for (let i = 0; i < 25; i++) {
+      const t = allTiles[i];
+      if (!t) continue;
+      if (t.innerHTML && t.innerHTML.trim() !== "") continue; 
+
+      if (mineMap.includes(i)) {
+        t.innerHTML = Client.SVG.BOMB;
+        t.classList.add("faded");
+      } else if (specialMap && specialMap[i]) {
+        const sp = specialMap[i];
+        if (sp.type === "GOLD_GEM") {
+          t.innerHTML = Client.SVG.GOLD;
+          t.classList.add("revealed-gold"); 
+          t.style.opacity = "0.7";
+        } else if (sp.type === "NOVA_STAR") {
+          t.innerHTML = Client.SVG.NOVA;
+          t.classList.add("revealed-nova"); 
+          t.style.opacity = "0.7";
+        }
+        Client.spawnMultiplierPopup(t, sp.mult);
+      } else {
+        t.innerHTML = Client.getSafeSvg();
+        t.classList.add("passive-missed");
+      }
+    }
+  },
+
+  spawnMultiplierPopup: (tileEl, mult) => {
+    try {
+      const pop = document.createElement("div");
+      pop.className = "multiplier-popup";
+      pop.innerText = (mult ?? 1) + "x";
+      tileEl.appendChild(pop);
+      setTimeout(() => pop.remove(), 1400 / ClientHelper.getSpeed());
+    } catch {}
+  },
+
+  renderGrid: () => {
+    const grid = document.getElementById("mineGrid");
+    if (!grid) return;
+    grid.innerHTML = "";
+    for (let i = 0; i < 25; i++) {
+      const t = document.createElement("button");
+      t.className = "tile";
+      
+      if (Client.isAutoTab && Client.selectedTiles.includes(i)) {
+        t.classList.add("tile-selected");
+      }
+      
+      t.onclick = () => Client.handleTileClick(i);
+      grid.appendChild(t);
+    }
+  },
+
+  highlightStep: (idx) => {
+    const tiles = document.querySelectorAll(".payout-tile");
+    tiles.forEach((t, i) => {
+      t.classList.remove("active-step", "passed");
+      if (i < idx) t.classList.add("passed");
+      if (i === idx) t.classList.add("active-step");
+    });
+    if (idx > -1 && tiles[idx]) tiles[idx].scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+  },
+
+  getSafeSvg: () => {
+    // ALWAYS return the standard Blue Gem for safe tiles.
+    // (Special Gold/Nova gems are handled separately by the reveal logic)
+    return Client.SVG.GEM;
+  },
+
+  fmt: (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n),
+
+  SVG: {
+    GEM: `<svg viewBox="0 0 64 64" fill="none"><defs><linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#00ffff"/><stop offset="100%" style="stop-color:#0077ff"/></linearGradient><linearGradient id="g2" x1="100%" y1="0%" x2="0%" y2="100%"><stop offset="0%" style="stop-color:#00ccff"/><stop offset="100%" style="stop-color:#0055dd"/></linearGradient></defs><path d="M16 16 L48 16 L56 26 L8 26 Z" fill="url(#g1)" stroke="#fff" stroke-width="0.5"/><path d="M8 26 L56 26 L32 58 Z" fill="url(#g2)" stroke="#fff" stroke-width="0.5"/><path d="M16 16 L8 26 L32 58 L32 26 Z" fill="white" opacity="0.2"/><path d="M48 16 L56 26 L32 58 L32 26 Z" fill="white" opacity="0.1"/></svg>`,
+    GOLD: `<svg viewBox="0 0 64 64" fill="none"><defs><linearGradient id="gg1" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#fff700"/><stop offset="100%" style="stop-color:#ffaa00"/></linearGradient><linearGradient id="gg2" x1="100%" y1="0%" x2="0%" y2="100%"><stop offset="0%" style="stop-color:#ffcc00"/><stop offset="100%" style="stop-color:#ff8800"/></linearGradient></defs><path d="M16 16 L48 16 L56 26 L8 26 Z" fill="url(#gg1)" stroke="#fff" stroke-width="0.5"/><path d="M8 26 L56 26 L32 58 Z" fill="url(#gg2)" stroke="#fff" stroke-width="0.5"/><path d="M16 16 L8 26 L32 58 L32 26 Z" fill="white" opacity="0.4"/><path d="M48 16 L56 26 L32 58 L32 26 Z" fill="white" opacity="0.2"/></svg>`,
+    NOVA: `<svg viewBox="0 0 64 64" fill="none"><defs><radialGradient id="novag" cx="50%" cy="50%" r="50%"><stop offset="0%" style="stop-color:#e9d5ff"/><stop offset="100%" style="stop-color:#9333ea"/></radialGradient></defs><path d="M32 2 L38 22 L58 22 L42 36 L48 58 L32 46 L16 58 L22 36 L6 22 L26 22 Z" fill="url(#novag)" stroke="#fff" stroke-width="1"/><circle cx="32" cy="32" r="8" fill="white" filter="blur(4px)"/></svg>`,
+    BOMB: `<svg viewBox="0 0 64 64" fill="none"><path d="M38 10 Q 42 0 52 6" stroke="#fbbf24" stroke-width="3" fill="none"/><circle cx="52" cy="6" r="3" fill="#fbbf24"><animate attributeName="opacity" values="1;0;1" dur="0.2s" repeatCount="indefinite"/></circle><circle cx="32" cy="36" r="18" fill="#1f1f1f" stroke="#ff4d4d" stroke-width="2"/><path d="M26 28 Q 22 32 24 38" stroke="white" stroke-width="2" opacity="0.3" stroke-linecap="round"/></svg>`
+  }
+};
+
+/* =========================
+   EXPOSE TO WINDOW
+========================= */
+window.play = Client.play;
+window.cashOut = Client.cashOut;
+window.stopAuto = () => Client.stopAutoInternal();
+window.toggleFeatures = Client.toggleFeatures;
+
+window.adjustBet = (type) => {
+  let val = parseFloat(document.getElementById("betInput")?.value || "0") || 0;
+  if (type === "1/2") val /= 2;
+  if (type === "2x") val *= 2;
+  document.getElementById("betInput").value = Math.max(0.1, val).toFixed(2);
+  Client.updatePayoutList();
+  updateBoosterDisplay();
+  Client.sfx("ui");
+};
+
+window.setMode = (m) => {
+  Client.sfx("coin");
+  Client.mode = m;
+  const overlay = document.getElementById("bonusOverlay");
+  if (overlay) overlay.style.display = "none";
+  const container = document.getElementById("gameContainer");
+  const badge = document.getElementById("boosterBadge");
+  if (container) container.className = "game-container";
+  if (badge) badge.style.display = "none";
+  const sel = document.getElementById("mineSelect");
+  if (!sel) return;
+  sel.innerHTML = "";
+  if (m !== "normal") {
+    const opt = document.createElement("option");
+    opt.value = 5;
+    opt.innerText = "5 Mines (Locked)"; opt.selected = true;
+    sel.appendChild(opt);
+    sel.disabled = true;
+  } else {
+    [1, 3, 5, 10, 20, 24].forEach(n => {
+      const opt = document.createElement("option");
+      opt.value = n;
+      opt.innerText = n + (n === 1 ? " Mine" : " Mines");
+      if (n === 3) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.disabled = false;
+  }
+  if (container && badge) {
+    if (m === "boost10") {
+      container.classList.add("mode-boost10");
+      badge.style.display = "block";
+      badge.style.background = "var(--booster-blue)";
+      badge.style.color = "white";
+      badge.innerText = "GEM BOOST ACTIVE (10x)";
+    } else if (m === "boost75") {
+      container.classList.add("mode-boost75");
+      badge.style.display = "block";
+      badge.style.background = "var(--gold)";
+      badge.style.color = "black";
+      badge.innerText = "SUPER NOVA ACTIVE (75x)";
+    }
+  }
+  Client.updatePayoutList();
+  updateBoosterDisplay();
+};
+
+function updateBoosterDisplay() {
+  const base = parseFloat(document.getElementById("betInput")?.value || "10");
+  const boosterBet = document.getElementById("boosterBetDisplay");
+  const p10 = document.getElementById("priceBoost10");
+  const p75 = document.getElementById("priceBoost75");
+  if (boosterBet) boosterBet.innerText = base.toFixed(2);
+  if (p10) p10.innerText = "$" + (base * 10).toFixed(2);
+  if (p75) p75.innerText = "$" + (base * 75).toFixed(2);
+  const totalBox = document.getElementById("totalBetBox");
+  const totalAmt = document.getElementById("totalBetAmount");
+  if (totalBox && totalAmt) {
+    if (Client.mode !== "normal") {
+      totalBox.style.display = "block";
+      const mult = Client.mode === "boost10" ? 10 : 75;
+      totalAmt.innerText = "$" + (base * mult).toFixed(2);
+    } else {
+      totalBox.style.display = "none";
+    }
+  }
+}
+
+window.openBonus = () => {
+  updateBoosterDisplay();
+  const overlay = document.getElementById("bonusOverlay");
+  if (overlay) overlay.style.display = "flex";
+  Client.sfx("ui");
+};
+
+// ⚡ UPDATED: Forces grid reset when switching tabs
+window.switchTab = (t) => {
+  if (Client.autoActive) return;
+  Client.sfx("ui");
+  const manual = document.getElementById("tabManual");
+  const auto = document.getElementById("tabAuto");
+  const autoInputs = document.getElementById("autoInputs");
+  if (manual) manual.className = t === "manual" ? "tab active" : "tab";
+  if (auto) auto.className = t === "auto" ? "tab active" : "tab";
+  if (autoInputs) autoInputs.style.display = t === "auto" ? "flex" : "none";
+  
+  Client.isAutoTab = (t === "auto");
+  // ALWAYS reset grid and selection when switching tabs to prevent "stuck" states
+  if (!Client.isAutoTab) {
+      Client.selectedTiles = []; 
+  }
+  Client.renderGrid(); 
+};
+
+window.toggleSettings = (e) => {
+  e.stopPropagation();
+  const p = document.getElementById("settingsPanel");
+  if (!p) return;
+  p.style.display = p.style.display === "block" ? "none" : "block";
+};
+
+// Start the game logic
+window.onload = () => {
+  try {
+    Client.init();
+  } catch (e) {
+    console.error(e);
+    alert("JS error: " + e.message);
+  }
+};
+</script>
+</body>
+</html>

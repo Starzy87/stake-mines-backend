@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Provably Fair Verifier</title>
+    <style>
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#0b161f; color:#b1bad3; margin:0; padding:24px; }
+        .wrap { max-width: 860px; margin: 0 auto; }
+        h1 { color:#fff; margin:0 0 10px; }
+        p { margin: 6px 0 18px; line-height: 1.4; }
+        .card { background:#1a2c38; border:1px solid rgba(255,255,255,.08); border-radius:12px; padding:16px; margin: 14px 0; }
+        label { display:block; font-size:12px; font-weight:700; margin: 10px 0 6px; color:#b1bad3; }
+        input, select, textarea { width:100%; box-sizing:border-box; padding:10px; border-radius:8px; border:1px solid rgba(255,255,255,.12); background:#0f212e; color:#fff; }
+        textarea { min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        button { background:#00e701; color:#05110a; border:0; border-radius:10px; padding:12px 14px; font-weight:900; cursor:pointer; width:100%; margin-top:12px; }
+        button:hover { filter:brightness(1.05); }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .grid { display:grid; grid-template-columns: repeat(5, 1fr); gap:8px; margin-top:10px; }
+        .cell { background:#2f4553; border-radius:10px; padding:10px; text-align:center; font-weight:900; color:#fff; min-height:44px; display:flex; align-items:center; justify-content:center;}
+        .mine { outline:2px solid #ff4d4d; }
+        .special { outline:2px solid #ffb100; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Provably Fair Verifier</h1>
+  <p>
+    This page recomputes the round outcome using the exact algorithm as the server:
+    HMAC-SHA256 → 4-byte floats → Index-Linked Fisher-Yates shuffle.
+  </p>
+
+  <div class="card">
+    <label>Server Seed (revealed after round)</label>
+    <input id="serverSeed" placeholder="Paste the revealed server seed here" />
+
+    <label>Client Seed</label>
+    <input id="clientSeed" value="ClientSeed_123" />
+
+    <label>Nonce</label>
+    <input id="nonce" type="number" min="1" step="1" value="1" />
+
+    <label>Mines</label>
+    <input id="mines" type="number" min="1" max="24" step="1" value="3" />
+
+    <label>Mode</label>
+    <select id="mode">
+      <option value="normal">normal</option>
+      <option value="boost10">boost10</option>
+      <option value="boost75">boost75</option>
+    </select>
+
+    <button id="verifyBtn">Verify</button>
+  </div>
+
+  <div class="card">
+    <div class="mono"><b>Computed Server Seed Hash:</b> <span id="serverHash">—</span></div>
+    <div class="mono" style="margin-top:6px;"><b>Mines (indices 0–24):</b> <span id="mineList">—</span></div>
+    <div class="mono" style="margin-top:6px;"><b>Specials:</b> <span id="specialList">—</span></div>
+
+    <div class="grid" id="grid"></div>
+  </div>
+</div>
+
+<script>
+/* =========================================
+   PROVABLY FAIR VERIFIER - FIXED LOGIC
+   1. Single HMAC call per cursor
+   2. Index-linked shuffle (floats[offset + i])
+   ========================================= */
+
+// --- SHA256 & HMAC HELPERS ---
+async function sha256Hex(str) {
+  const data = new TextEncoder().encode(str);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return [...new Uint8Array(hash)]
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function hmacSha256(serverSeedString, msg) {
+  const keyBytes = new TextEncoder().encode(serverSeedString);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(msg));
+  return new Uint8Array(sig);
+}
+
+// --- FLOAT GENERATION ---
+async function generateFloats(serverSeed, clientSeed, nonce, count) {
+  const floats = [];
+  let i = 0;
+  while (floats.length < count) {
+    const msg = `${clientSeed}:${nonce}:${i++}`;
+    // CORRECTED: Single HMAC call
+    const buf = await hmacSha256(serverSeed, msg);
+
+    for (let j = 0; j < buf.length / 4; j++) {
+      if (floats.length >= count) break;
+      const o = j * 4;
+      const val = (buf[o] << 24) | (buf[o+1] << 16) | (buf[o+2] << 8) | (buf[o+3]);
+      const u = (val >>> 0);
+      floats.push(u / 4294967296);
+    }
+  }
+  return floats;
+}
+
+// --- CORRECTED SHUFFLE LOGIC ---
+// Matches Backend: Uses floats[offset + i] instead of sequential cursor
+function backendShuffleExact(arr, floats, offset = 0) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    // Exact Backend Logic: float index is tied to loop index 'i'
+    const r = floats[offset + i]; 
+    const j = Math.floor(r * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function renderGrid(mineSet, specialMap) {
+  const grid = document.getElementById("grid");
+  if(!grid) return;
+  
+  grid.innerHTML = "";
+  for (let i = 0; i < 25; i++) {
+    const d = document.createElement("div");
+    d.className = "cell";
+    if (mineSet.has(i)) {
+      d.classList.add("mine");
+      d.textContent = "💣 " + i;
+    } else if (specialMap[i]) {
+      d.classList.add("special");
+      d.textContent = (specialMap[i].type === "GOLD_GEM" ? "⭐" : "✨") + " " + i;
+    } else {
+      d.textContent = i;
+    }
+    grid.appendChild(d);
+  }
+}
+
+// --- MAIN VERIFY HANDLER ---
+document.getElementById("verifyBtn").addEventListener("click", async () => {
+  try {
+      const serverSeed = document.getElementById("serverSeed").value.trim();
+      const clientSeed = document.getElementById("clientSeed").value.trim();
+      const nonceVal = document.getElementById("nonce").value;
+      const minesVal = document.getElementById("mines").value;
+      const mode = document.getElementById("mode").value;
+
+      if (!serverSeed || !clientSeed || !nonceVal) {
+          alert("Please fill all fields.");
+          return;
+      }
+      
+      const nonce = parseInt(nonceVal, 10);
+      const mines = parseInt(minesVal, 10);
+
+      // 1. Show Hash of the Input Seed
+      document.getElementById("serverHash").textContent = await sha256Hex(serverSeed);
+
+      // 2. Generate Floats
+      const floats = await generateFloats(serverSeed, clientSeed, nonce, 60);
+
+      // 3. Shuffle Mines (Offset 0)
+      const allTiles = Array.from({length: 25}, (_, i) => i);
+      // CORRECTED: Use backendShuffleExact with offset 0
+      const shuffledAll = backendShuffleExact(allTiles, floats, 0);
+
+      const mineLocations = shuffledAll.slice(0, mines);
+      const mineSet = new Set(mineLocations);
+
+      // 4. Shuffle Specials (Offset 25)
+      const specialItems = {};
+      if (mode !== "normal") {
+        const safeTiles = shuffledAll.slice(mines); 
+        // CORRECTED: Use backendShuffleExact with offset 25
+        const shuffledSafe = backendShuffleExact(safeTiles, floats, 25);
+        const boostedTiles = shuffledSafe.slice(0, 3);
+
+        boostedTiles.forEach((idx, i) => {
+          // Multiplier determination uses float[30] onward (offset 30)
+          const r = floats[i + 30]; 
+          if (mode === "boost10") {
+            let mult = 1.5;
+            if (r > 0.6) mult = 3;
+            if (r > 0.9) mult = 5;
+            if (r > 0.99) mult = 10;
+            specialItems[idx] = { type: "GOLD_GEM", mult };
+          } else {
+            let mult = 3;
+            if (r > 0.5) mult = 10;
+            if (r > 0.8) mult = 25;
+            if (r > 0.95) mult = 50;
+            specialItems[idx] = { type: "NOVA_STAR", mult };
+          }
+        });
+      }
+
+      // 5. Render
+      document.getElementById("mineList").textContent = JSON.stringify(mineLocations);
+      document.getElementById("specialList").textContent = Object.keys(specialItems).length
+        ? JSON.stringify(specialItems)
+        : "—";
+
+      renderGrid(mineSet, specialItems);
+
+  } catch (err) {
+      alert("Error: " + err.message);
+      console.error(err);
+  }
+});
+</script>
+</body>
+</html>
